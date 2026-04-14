@@ -1,0 +1,30 @@
+{
+  "name": "vclaw",
+  "version": "0.1.0",
+  "description": "CLI to set up and deploy vercel-openclaw with one command",
+  "type": "module",
+  "files": [
+    "bin/",
+    "src/",
+    "README.md"
+  ],
+  "bin": {
+    "vclaw": "./bin/vclaw.mjs"
+  },
+  "scripts": {
+    "test": "node --test src/*.test.mjs src/**/*.test.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vercel-labs/vclaw.git"
+  },
+  "homepage": "https://github.com/vercel-labs/vclaw#readme",
+  "bugs": {
+    "url": "https://github.com/vercel-labs/vclaw/issues"
+  },
+  "keywords": ["vercel", "openclaw", "cli", "sandbox"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}
