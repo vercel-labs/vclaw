@@ -6,7 +6,7 @@ import { parseArgs } from "node:util";
 import { checkPrereqs } from "../steps/prereqs.mjs";
 import { cloneRepo } from "../steps/clone.mjs";
 import { linkProject } from "../steps/link.mjs";
-import { provisionUpstash } from "../steps/upstash.mjs";
+import { provisionRedis } from "../steps/redis.mjs";
 import { buildManagedEnvVars, pushEnvVars, readLinkedProject } from "../steps/env.mjs";
 import { deploy } from "../steps/deploy.mjs";
 import { runVerify } from "../steps/run-verify.mjs";
@@ -286,8 +286,8 @@ export async function init(argv) {
   // 6. Link to Vercel
   const linked = await linkProject(projectDir, name, scope);
 
-  // 7. Provision Upstash Redis
-  await provisionUpstash(projectDir, scope, values.yes);
+  // 7. Provision Redis via Vercel Marketplace
+  await provisionRedis(projectDir, scope, values.yes);
 
   // 8. Configure project protection when requested
   let { protectionBypassSecret } = await configureProjectProtection(

@@ -12,7 +12,7 @@
 
 - clone `vercel-labs/vercel-openclaw`
 - link a Vercel project
-- provision Upstash Redis
+- provision Redis via the Vercel Marketplace
 - configure managed environment variables
 - optionally enable deployment protection plus automation bypass
 - deploy
@@ -60,7 +60,7 @@ This will:
 2. pick a Vercel team scope (interactive when you have more than one)
 3. clone `vercel-labs/vercel-openclaw`
 4. create and link a Vercel project (prompts if the default name is taken)
-5. provision Upstash Redis via the Vercel Marketplace
+5. provision Redis via the Vercel Marketplace (Redis Cloud)
 6. optionally configure Vercel Deployment Protection
 7. generate or reuse an `ADMIN_SECRET`
 8. push managed env vars (`ADMIN_SECRET`, `CRON_SECRET`, `VERCEL_AUTOMATION_BYPASS_SECRET`)
@@ -176,10 +176,9 @@ Check local prerequisites and current Vercel authentication status.
 - `CRON_SECRET` when you provide `--cron-secret`
 - `VERCEL_AUTOMATION_BYPASS_SECRET` when deployment protection or an explicit bypass secret is configured
 
-It relies on the Vercel Marketplace integration to supply:
+It relies on the Vercel Marketplace Redis integration to supply:
 
-- `UPSTASH_REDIS_REST_URL`
-- `UPSTASH_REDIS_REST_TOKEN`
+- `REDIS_URL` (a Redis wire-protocol URL; `KV_URL` is also accepted as an alias)
 
 ## Behavior Notes
 

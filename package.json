@@ -18,7 +18,7 @@
     "src/steps/prereqs.mjs",
     "src/steps/protection.mjs",
     "src/steps/run-verify.mjs",
-    "src/steps/upstash.mjs",
+    "src/steps/redis.mjs",
     "src/ui.mjs",
     "src/vercel-api.mjs",
     "src/vercel.mjs",
