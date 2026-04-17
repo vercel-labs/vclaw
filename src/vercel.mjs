@@ -1,4 +1,4 @@
-import { exec } from "./shell.mjs";
+import { exec, spawn } from "./shell.mjs";
 
 function withGlobalArgs(args, { scope, nonInteractive = false } = {}) {
   const fullArgs = [];
@@ -18,6 +18,20 @@ function formatCommand(args) {
 
 export async function vercelExec(args, opts = {}) {
   return exec("vercel", withGlobalArgs(args, opts), opts);
+}
+
+/**
+ * Run vercel with stdio inherited so the user can answer interactive prompts
+ * (Y/n, multi-choice lists) directly. Use this for any `vercel` subcommand
+ * that reads from a TTY — notably `integration add`, which asks "Do you want
+ * to link this resource to the current project?" and bails silently with
+ * code 0 when stdin is piped.
+ */
+export async function vercelSpawn(args, opts = {}) {
+  return spawn("vercel", withGlobalArgs(args, opts), {
+    cwd: opts.cwd,
+    env: opts.env,
+  });
 }
 
 export async function vercelRun(args, opts = {}) {

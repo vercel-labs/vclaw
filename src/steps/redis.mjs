@@ -1,8 +1,8 @@
 import { debug } from "../debug.mjs";
 import { isReplay } from "../tape.mjs";
-import { vercelExec } from "../vercel.mjs";
+import { vercelSpawn } from "../vercel.mjs";
 import { listProjectEnvs, readVercelToken } from "../vercel-api.mjs";
-import { spinner, step, success, warn } from "../ui.mjs";
+import { log, spinner, step, success, warn } from "../ui.mjs";
 
 /**
  * Returns true when a Redis wire-protocol URL is present in the project's
@@ -70,40 +70,36 @@ export async function provisionRedis(projectDir, scope, linked, yes = false) {
     return;
   }
 
-  warn(
-    "This may open a browser for Redis Terms of Service on first install. Don't close the terminal."
-  );
-
-  const result = await vercelExec(["integration", "add", "redis"], {
-    cwd: projectDir,
-    scope,
-    nonInteractive: yes,
-  });
-
-  const combined = `${result.stdout}\n${result.stderr}`;
-  const needsBrowser = /Additional setup required|Opening browser/i.test(combined);
-
-  if (result.code === 0 && !needsBrowser) {
-    success("Redis provisioned and env vars linked");
-    return;
-  }
-
-  if (!needsBrowser) {
-    throw new Error(
-      `vercel integration add redis exited with code ${result.code}:\n${result.stderr || result.stdout}`
-    );
-  }
-
   if (yes) {
     throw new Error(
-      "Redis provisioning needs a browser step. Re-run without --yes."
+      "Redis provisioning is interactive (CLI 50 prompts `Do you want to link this resource?` " +
+        "and opens a browser for Terms of Service). Re-run without --yes."
     );
   }
 
-  const spin = spinner(
-    "Waiting for REDIS_URL — finish the browser checkout to continue"
+  warn(
+    "The Vercel CLI will prompt you inline (Y/n) and may open a browser for Redis Terms of Service. Answer both to continue."
   );
+  log("");
 
+  // Inherit stdio so the user sees and answers the Y/n prompt. Piped stdio
+  // causes CLI 50 to silently bail with code 0 without linking anything,
+  // which ships a broken deploy (no REDIS_URL → 500 on every route).
+  try {
+    await vercelSpawn(["integration", "add", "redis"], {
+      cwd: projectDir,
+      scope,
+    });
+  } catch (err) {
+    throw new Error(`vercel integration add redis failed: ${err?.message ?? err}`);
+  }
+
+  log("");
+
+  // Code 0 from the CLI is not proof the resource was linked — the user may
+  // have answered "n", or the marketplace checkout may still be completing
+  // in the browser. Poll the env vars until REDIS_URL / KV_URL shows up.
+  const spin = spinner("Verifying REDIS_URL is attached to the project");
   const ready = await waitForRedisEnvs({
     read: () => readRedisEnvs(linked),
     onTick: (attempt) => debug(`redis poll attempt ${attempt}: not ready yet`),
@@ -113,8 +109,8 @@ export async function provisionRedis(projectDir, scope, linked, yes = false) {
   if (!ready) {
     spin.fail("REDIS_URL never appeared");
     throw new Error(
-      "Timed out waiting for REDIS_URL to appear. " +
-        "Confirm the Redis database was created in the browser, then rerun `vclaw create`."
+      "Redis was not linked to this project. " +
+        "Confirm the resource install in the browser, answer the CLI prompt with Y, then rerun `vclaw create`."
     );
   }
 
