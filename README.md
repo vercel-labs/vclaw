@@ -1,23 +1,115 @@
-# vclaw
+<p align="center">
+  <img src="https://raw.githubusercontent.com/vercel-labs/vclaw/HEAD/assets/openclaw-logo.svg" width="96" height="96" alt="OpenClaw logo" />
+</p>
 
-CLI to set up and deploy [vercel-openclaw](https://github.com/vercel-labs/vercel-openclaw) with one command.
+<h1 align="center">vclaw</h1>
 
-## Quick start
+<p align="center">
+  Deploy <a href="https://github.com/vercel-labs/vercel-openclaw">vercel-openclaw</a> from the command line.
+</p>
+
+`vclaw` is a workflow wrapper around the installed Vercel CLI. It automates the same high-level setup path as the OpenClaw deploy button:
+
+- clone `vercel-labs/vercel-openclaw`
+- link a Vercel project
+- provision Upstash Redis
+- configure managed environment variables
+- optionally enable deployment protection plus automation bypass
+- deploy
+- run launch verification
+
+## Install
+
+Run without installing:
 
 ```bash
-npx vclaw init --scope my-team
+npx @vercel/vclaw init --scope my-team
+```
+
+Or install globally:
+
+```bash
+npm i -g @vercel/vclaw
+vclaw init --scope my-team
+```
+
+## Prerequisites
+
+- Node.js `>=20`
+- `git`
+- the Vercel CLI installed: `npm i -g vercel`
+- Vercel auth via `vercel login` or `VERCEL_TOKEN`
+
+You can check your environment first:
+
+```bash
+vclaw doctor
+```
+
+## Quick Start
+
+Deploy OpenClaw into a Vercel team:
+
+```bash
+npx @vercel/vclaw init --scope my-team
 ```
 
 This will:
 
-1. Check prerequisites (git, node >= 20, vercel CLI)
-2. Clone `vercel-labs/vercel-openclaw`
-3. Create and link a Vercel project
-4. Provision Upstash Redis via the Vercel Marketplace
-5. Optionally configure Vercel deployment protection and automation bypass
-6. Generate an `ADMIN_SECRET` and push managed env vars
-7. Deploy to production
-8. Run launch verification
+1. check local prerequisites
+2. pick a Vercel team scope (interactive when you have more than one)
+3. clone `vercel-labs/vercel-openclaw`
+4. create and link a Vercel project (prompts if the default name is taken)
+5. provision Upstash Redis via the Vercel Marketplace
+6. optionally configure Vercel Deployment Protection
+7. generate or reuse an `ADMIN_SECRET`
+8. push managed env vars (`ADMIN_SECRET`, `CRON_SECRET`, `VERCEL_AUTOMATION_BYPASS_SECRET`)
+9. deploy to production
+10. run launch verification against the new deployment
+
+## Common Flows
+
+Basic deploy:
+
+```bash
+vclaw init --scope my-team
+```
+
+Choose a project name and target directory:
+
+```bash
+vclaw init --scope my-team --name my-openclaw --dir ~/dev/my-openclaw
+```
+
+Use your own admin secret:
+
+```bash
+vclaw init --scope my-team --admin-secret "$(openssl rand -hex 32)"
+```
+
+Set a dedicated cron secret:
+
+```bash
+vclaw init --scope my-team --cron-secret "$(openssl rand -hex 32)"
+```
+
+Enable deployment protection and configure webhook bypass automatically:
+
+```bash
+vclaw init --scope my-team --deployment-protection sso
+```
+
+Or password protection:
+
+```bash
+vclaw init --scope my-team --deployment-protection password
+```
+
+Prepare everything but stop before deploy:
+
+```bash
+vclaw init --scope my-team --skip-deploy
+```
 
 ## Commands
 
@@ -25,50 +117,96 @@ This will:
 
 Full setup from zero to deployed.
 
+```text
+--name <name>                      Vercel project name (default: openclaw)
+--scope <scope>                    Vercel team scope
+--team <slug>                      Deprecated alias for --scope
+--dir <path>                       Clone destination (default: ./vercel-openclaw)
+--admin-secret <hex>               Use a specific admin secret
+--cron-secret <hex>                Optional dedicated cron secret
+--deployment-protection <mode>     Optional protection mode: none | sso | password
+--protection-bypass-secret <s>     Optional automation bypass secret
+--skip-deploy                      Stop after provisioning
+--yes                              Skip confirmation prompts where possible
 ```
-Options:
-  --name <name>            Vercel project name (default: openclaw)
-  --scope <scope>          Vercel team scope
-  --team <slug>            Deprecated alias for --scope
-  --dir <path>             Clone destination (default: ./vercel-openclaw)
-  --admin-secret <hex>     Provide a specific admin secret
-  --cron-secret <hex>      Optional dedicated cron secret
-  --deployment-protection <none|sso|password>
-                           Optional Vercel deployment protection mode
-  --protection-bypass-secret <secret>
-                           Optional automation bypass secret
-  --skip-deploy            Stop after provisioning
-  --yes                    Skip confirmation prompts
-```
+
+Notes:
+
+- `--yes` does not bypass first-time marketplace terms acceptance if the integration requires a browser step.
+- `--deployment-protection` also injects `VERCEL_AUTOMATION_BYPASS_SECRET` so protected incoming webhooks can still reach OpenClaw.
+- if you do not pass `--admin-secret`, `vclaw` generates one for you.
 
 ### `vclaw verify`
 
 Run launch verification against an existing deployment.
 
+```text
+--url <url>                        Deployment URL
+--admin-secret <secret>            Admin secret for auth
+--destructive                      Run destructive verification phases
+--protection-bypass <secret>       Deployment protection bypass secret
 ```
-Options:
-  --url <url>              Deployment URL (required)
-  --admin-secret <secret>  Admin secret (required)
-  --destructive            Include destructive phases
-  --protection-bypass <s>  Deployment protection bypass secret
+
+Example:
+
+```bash
+vclaw verify \
+  --url https://my-openclaw.vercel.app \
+  --admin-secret "$ADMIN_SECRET"
+```
+
+Protected deployment:
+
+```bash
+vclaw verify \
+  --url https://my-openclaw.vercel.app \
+  --admin-secret "$ADMIN_SECRET" \
+  --protection-bypass "$VERCEL_AUTOMATION_BYPASS_SECRET"
 ```
 
 ### `vclaw doctor`
 
-Check local prerequisites without changing anything.
+Check local prerequisites and current Vercel authentication status.
 
-## Prerequisites
+## Managed Environment Variables
 
-- Node.js >= 20
-- git
-- [Vercel CLI](https://vercel.com/docs/cli) (`npm i -g vercel`)
-- Vercel auth via `vercel login` or `VERCEL_TOKEN`
+`vclaw` manages these variables directly:
 
-## Notes
+- `ADMIN_SECRET`
+- `CRON_SECRET` when you provide `--cron-secret`
+- `VERCEL_AUTOMATION_BYPASS_SECRET` when deployment protection or an explicit bypass secret is configured
 
-- `vclaw` is a workflow wrapper around the installed Vercel CLI, not a replacement for it.
-- For deploy-button parity, the default path only requires `ADMIN_SECRET`; Upstash is provisioned through the Marketplace integration.
-- If you enable deployment protection through `vclaw`, it also configures `VERCEL_AUTOMATION_BYPASS_SECRET` so protected webhooks can still reach OpenClaw.
+It relies on the Vercel Marketplace integration to supply:
+
+- `UPSTASH_REDIS_REST_URL`
+- `UPSTASH_REDIS_REST_TOKEN`
+
+## Behavior Notes
+
+- `vclaw` assumes you already have the Vercel CLI installed.
+- `vclaw` does not replace `vercel`; it orchestrates it.
+- deploys are production deploys
+- verification calls OpenClaw’s admin preflight and launch-verify endpoints
+- if deployment protection is enabled, verify requests include the `x-vercel-protection-bypass` header when available
+
+## Development
+
+Run tests:
+
+```bash
+npm test
+```
+
+Preview the npm payload:
+
+```bash
+npm pack --dry-run
+```
+
+## Repository
+
+- GitHub: `vercel-labs/vclaw`
+- Source project deployed by this CLI: `vercel-labs/vercel-openclaw`
 
 ## License
 

@@ -1,12 +1,28 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import { debug } from "./debug.mjs";
+import {
+  isRecord,
+  isReplay,
+  normalizeExecKey,
+  recordEvent,
+  replayEvent,
+} from "./tape.mjs";
 
 /**
  * Run a command and return { stdout, stderr, code }.
  * Rejects only on spawn failure, not on non-zero exit.
  */
 export function exec(cmd, args = [], opts = {}) {
+  const key = normalizeExecKey(`${cmd} ${args.join(" ")}`.trim());
+  if (isReplay()) {
+    const taped = replayEvent("exec", key);
+    debug(`exec ${key} → replayed (code=${taped.code})`);
+    return Promise.resolve(taped);
+  }
   return new Promise((resolve, reject) => {
     const { input, env, cwd } = opts;
+    const startedAt = Date.now();
+    debug(`exec ${cmd} ${args.join(" ")}`, cwd ? { cwd } : undefined);
     const child = nodeSpawn(cmd, args, {
       cwd,
       env,
@@ -33,11 +49,21 @@ export function exec(cmd, args = [], opts = {}) {
     });
 
     child.on("close", (code) => {
-      resolve({
+      const ms = Date.now() - startedAt;
+      debug(
+        `exec ${cmd} → code=${code ?? 0} (${ms}ms)`,
+        {
+          stdout: stdout.length > 400 ? `${stdout.slice(0, 400)}…` : stdout,
+          stderr: stderr.length > 400 ? `${stderr.slice(0, 400)}…` : stderr,
+        }
+      );
+      const result = {
         stdout: stdout.trimEnd(),
         stderr: stderr.trimEnd(),
         code: code ?? 0,
-      });
+      };
+      if (isRecord()) recordEvent("exec", key, result);
+      resolve(result);
     });
 
     if (input === undefined || input === null) {

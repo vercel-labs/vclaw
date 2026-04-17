@@ -1,18 +1,38 @@
 {
-  "name": "vclaw",
-  "version": "0.1.0",
+  "name": "@vercel/vclaw",
+  "version": "0.1.1",
   "description": "CLI to set up and deploy vercel-openclaw with one command",
   "type": "module",
   "files": [
-    "bin/",
-    "src/",
+    "bin/vclaw.mjs",
+    "src/commands/doctor.mjs",
+    "src/commands/init.mjs",
+    "src/commands/verify.mjs",
+    "src/debug.mjs",
+    "src/shell.mjs",
+    "src/tape.mjs",
+    "src/steps/clone.mjs",
+    "src/steps/deploy.mjs",
+    "src/steps/env.mjs",
+    "src/steps/link.mjs",
+    "src/steps/prereqs.mjs",
+    "src/steps/protection.mjs",
+    "src/steps/run-verify.mjs",
+    "src/steps/upstash.mjs",
+    "src/ui.mjs",
+    "src/vercel-api.mjs",
+    "src/vercel.mjs",
+    "assets/openclaw-logo.svg",
     "README.md"
   ],
   "bin": {
-    "vclaw": "./bin/vclaw.mjs"
+    "vclaw": "bin/vclaw.mjs"
   },
   "scripts": {
     "test": "node --test src/*.test.mjs src/**/*.test.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "repository": {
     "type": "git",
@@ -22,7 +42,12 @@
   "bugs": {
     "url": "https://github.com/vercel-labs/vclaw/issues"
   },
-  "keywords": ["vercel", "openclaw", "cli", "sandbox"],
+  "keywords": [
+    "vercel",
+    "openclaw",
+    "cli",
+    "sandbox"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=20"

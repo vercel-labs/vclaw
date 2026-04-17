@@ -64,6 +64,36 @@ export function extractDeploymentUrl(stdout) {
   );
 }
 
+export function findAvailableName(base, taken) {
+  if (!taken || !taken.has(base)) return base;
+  for (let i = 2; i < 1000; i += 1) {
+    const candidate = `${base}-${i}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${base}-${Date.now()}`;
+}
+
+// Vercel project naming rules: lowercase letters, digits, hyphens and
+// underscores, 1–100 chars, no leading/trailing hyphen. See
+// https://vercel.com/docs/projects/overview#project-name
+const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,98}[a-z0-9]$|^[a-z0-9]$/;
+
+export function validateProjectName(name) {
+  if (typeof name !== "string" || name.length === 0) {
+    return "Project name is required.";
+  }
+  if (name.length > 100) {
+    return "Project name must be 100 characters or fewer.";
+  }
+  if (name !== name.toLowerCase()) {
+    return "Project name must be lowercase.";
+  }
+  if (!NAME_RE.test(name)) {
+    return "Project name must use only lowercase letters, digits, hyphens, and underscores, and must not start or end with a hyphen.";
+  }
+  return null;
+}
+
 export function getAutomationBypassSecret(protectionBypass) {
   if (!protectionBypass || typeof protectionBypass !== "object") {
     return undefined;

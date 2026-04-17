@@ -1,5 +1,8 @@
 /** Minimal terminal output helpers — no dependencies. */
 
+import { createInterface } from "node:readline";
+import { isRecord, isReplay, recordEvent, replayEvent } from "./tape.mjs";
+
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
 const DIM = "\x1b[2m";
@@ -40,4 +43,110 @@ export function dim(msg) {
 
 export function bold(msg) {
   return c(BOLD, msg);
+}
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+export function spinner(label) {
+  const stream = process.stdout;
+  const canAnimate = Boolean(stream.isTTY) && !process.env.CI;
+
+  if (!canAnimate) {
+    console.log(c(CYAN, `▸ ${label}`));
+    return {
+      update(next) {
+        console.log(c(CYAN, `▸ ${next}`));
+      },
+      succeed(msg = label) {
+        console.log(c(GREEN, `✓ ${msg}`));
+      },
+      fail(msg = label) {
+        console.error(c(RED, `✗ ${msg}`));
+      },
+    };
+  }
+
+  let current = label;
+  let frame = 0;
+  const render = () => {
+    const cols = stream.columns || 80;
+    // Reserve 2 cols for the spinner glyph + space; keep 1 col as safety
+    // margin so the terminal never wraps the line and \r can fully clear it.
+    const max = Math.max(10, cols - 4);
+    const truncated =
+      current.length > max ? `${current.slice(0, max - 1)}…` : current;
+    const text = `${c(CYAN, SPINNER_FRAMES[frame])} ${truncated}`;
+    stream.write(`\r\x1b[2K${text}`);
+    frame = (frame + 1) % SPINNER_FRAMES.length;
+  };
+  render();
+  const interval = setInterval(render, 80);
+
+  const stop = (symbol, msg) => {
+    clearInterval(interval);
+    const cols = stream.columns || 80;
+    const max = Math.max(10, cols - 4);
+    const truncated = msg.length > max ? `${msg.slice(0, max - 1)}…` : msg;
+    stream.write(`\r\x1b[2K${symbol} ${truncated}\n`);
+  };
+
+  return {
+    update(next) {
+      current = next;
+    },
+    succeed(msg = current) {
+      stop(c(GREEN, "✓"), msg);
+    },
+    fail(msg = current) {
+      stop(c(RED, "✗"), msg);
+    },
+  };
+}
+
+export function isInteractive() {
+  // Replay mode mimics the original interactive run so the same prompt
+  // events in the tape get consumed, even when we're running under a pipe
+  // or in CI. Record mode still honors the real TTY state so we don't
+  // record prompts that didn't actually fire.
+  if (isReplay()) return true;
+  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
+export async function prompt(question, defaultValue = "") {
+  if (isReplay()) {
+    const taped = replayEvent("prompt", question);
+    return taped ?? defaultValue;
+  }
+  if (!isInteractive()) {
+    if (isRecord()) recordEvent("prompt", question, defaultValue);
+    return defaultValue;
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const suffix = defaultValue ? ` ${dim(`(${defaultValue})`)}` : "";
+  const cleanup = () => {
+    try {
+      rl.close();
+    } catch {
+      // ignore
+    }
+  };
+  const onSigint = () => {
+    cleanup();
+    process.stdout.write("\n");
+    console.error(c(YELLOW, "Cancelled."));
+    process.exit(130);
+  };
+  rl.on("SIGINT", onSigint);
+  try {
+    const answer = await new Promise((resolve) => {
+      rl.question(`${c(CYAN, "?")} ${question}${suffix} `, resolve);
+    });
+    const trimmed = answer.trim();
+    const resolved = trimmed || defaultValue;
+    if (isRecord()) recordEvent("prompt", question, resolved);
+    return resolved;
+  } finally {
+    rl.removeListener("SIGINT", onSigint);
+    cleanup();
+  }
 }
