@@ -78,15 +78,15 @@ test("provisionSlack: explicit configToken selects create branch, calls POST /ap
         tokenRotated: false,
       });
     }
-    if (url.endsWith("/api/admin/status")) {
+    if (url.endsWith("/api/channels/summary")) {
       statusCalls += 1;
       if (statusCalls >= 2) {
         return jsonResponse(200, {
-          channels: { slack: { configured: true } },
+          slack: { configured: true, connected: true },
         });
       }
       return jsonResponse(200, {
-        channels: { slack: { configured: false } },
+        slack: { configured: false, connected: false },
       });
     }
     return jsonResponse(404, {});

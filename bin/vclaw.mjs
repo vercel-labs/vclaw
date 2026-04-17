@@ -3,6 +3,7 @@
 import { installFetchShim, mode as tapeMode, scrubTapeFile } from "../src/tape.mjs";
 installFetchShim();
 
+import { add } from "../src/commands/add.mjs";
 import { create } from "../src/commands/create.mjs";
 import { verify } from "../src/commands/verify.mjs";
 import { doctor } from "../src/commands/doctor.mjs";
@@ -13,6 +14,7 @@ const usage = `
 
   Usage:
     vclaw create [options]       Clone, provision, and deploy openclaw
+    vclaw add <channel>          Attach slack|telegram|discord|whatsapp to a deployed project
     vclaw verify [options]       Run launch verification against a deployment
     vclaw doctor                 Check local prerequisites and project health
     vclaw tape scrub <path>      Redact secrets from a record/replay tape file
@@ -86,7 +88,7 @@ if (command === "tape") {
   }
 }
 
-const commands = { create, verify, doctor };
+const commands = { create, add, verify, doctor };
 const handler = commands[command];
 
 if (!handler) {
