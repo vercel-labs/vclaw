@@ -95,7 +95,7 @@ export async function provisionSlack(
   const cache = readSlackCache();
   const configToken = (
     configTokenInput ??
-    (canPrompt ? await promptConfigToken() : "")
+    (canPrompt ? await promptConfigToken(openBrowser) : "")
   ).trim();
   if (!configToken) {
     warn(
@@ -175,11 +175,21 @@ async function promptBranch() {
   return "create";
 }
 
-async function promptConfigToken() {
+async function promptConfigToken(openBrowser = defaultOpenBrowser) {
+  const tokenUrl = "https://api.slack.com/apps";
   log("");
-  log("Paste a Slack App Configuration Token.");
-  log(dim("  Generate one at https://api.slack.com/apps → Your Apps → Generate Token."));
+  log("To create your Slack app, we need an App Configuration Token.");
+  log(dim(`  Opening ${tokenUrl} in your browser…`));
+  log(dim("  1. Sign in and pick the workspace you want to install into."));
+  log(dim("  2. Under \"Your App Configuration Tokens\", click Generate Token."));
+  log(dim("  3. Copy the xoxe.xoxp-… token and paste it here."));
   log(dim("  Tokens expire after 12 hours — we only use it once."));
+  try {
+    openBrowser(tokenUrl);
+  } catch {
+    // best-effort — instructions above still point at the URL
+  }
+  log("");
   const token = await promptMasked("Slack App Configuration Token");
   return token;
 }
