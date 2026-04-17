@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
+import { debug } from "../debug.mjs";
 import { isReplay } from "../tape.mjs";
 import { dim, log, prompt, promptMasked, spinner, step, warn } from "../ui.mjs";
 import { buildAuthHeaders } from "./run-verify.mjs";
@@ -52,12 +53,27 @@ export async function provisionSlack(
   if (!url) throw new Error("provisionSlack: deployment url is required");
   if (!adminSecret) throw new Error("provisionSlack: adminSecret is required");
 
+  debug("provisionSlack.start", {
+    url,
+    canPrompt,
+    preselectedBranch,
+    hasConfigToken: Boolean(configTokenInput),
+    hasRefreshToken: Boolean(refreshTokenInput),
+    appName: appNameInput || null,
+    hasBotToken: Boolean(botToken),
+    hasSigningSecret: Boolean(signingSecret),
+    hasProtectionBypass: Boolean(protectionBypassSecret),
+    pollTimeoutMs,
+  });
+
   // Resolve branch. Precedence: explicit preselected > explicit flags > prompt > skip.
   const branch =
     preselectedBranch ||
     (configTokenInput ? "create" : null) ||
     (botToken && signingSecret ? "connect" : null) ||
     (canPrompt ? await promptBranch() : "skip");
+
+  debug("provisionSlack.branch", { branch });
 
   if (branch === "skip") {
     return { branch: "skip", ok: true, configured: false };
@@ -128,6 +144,16 @@ export async function provisionSlack(
     protectionBypassSecret,
   });
 
+  debug("provisionSlack.createSlackApp.result", {
+    ok: created.ok,
+    status: created.status,
+    hasInstallUrl: Boolean(created.body?.installUrl),
+    hasInstallToken: Boolean(created.body?.installToken),
+    appId: created.body?.appId ?? null,
+    appName: created.body?.appName ?? null,
+    tokenRotated: created.body?.tokenRotated ?? null,
+  });
+
   if (!created.ok || !created.body?.installUrl) {
     return { branch: "create", ok: false, configured: false };
   }
@@ -140,13 +166,39 @@ export async function provisionSlack(
   });
 
   const installUrl = created.body.installUrl;
+  const installTokenPrefix = (created.body.installToken ?? "").slice(0, 6);
+  const mintedAt = Date.now();
+
+  // These debug lines are load-bearing for diagnosis. If the browser later
+  // lands on `install_token_invalid`, the server-side log shows the UA of
+  // whoever burned the token first. If vclaw consumes it here, clientKind
+  // will be `node-fetch`; if a browser consumes it, `browser`. Anything
+  // between `provisionSlack.installUrl.minted` and
+  // `provisionSlack.installUrl.browser_open` on the vclaw side is suspect.
+  debug("provisionSlack.installUrl.minted", {
+    tokenPrefix: installTokenPrefix,
+    mintedAt,
+    installUrlPreview: installUrl.replace(/install_token=[^&]+/, "install_token=<redacted>"),
+    note: "vclaw MUST NOT fetch this URL — the server consumes the token on any GET",
+  });
+
   step("Opening Slack OAuth install in your browser");
   log(dim(`  If nothing opens, visit: ${installUrl}`));
+  debug("provisionSlack.installUrl.browser_open", {
+    tokenPrefix: installTokenPrefix,
+    ageMs: Date.now() - mintedAt,
+  });
   openBrowser(installUrl);
+  debug("provisionSlack.installUrl.browser_open.returned", {
+    tokenPrefix: installTokenPrefix,
+    ageMs: Date.now() - mintedAt,
+  });
 
   const configured = await waitForSlackConfigured(url, adminSecret, {
     protectionBypassSecret,
     timeoutMs: pollTimeoutMs,
+    installTokenPrefix,
+    mintedAt,
   });
 
   return {
@@ -202,7 +254,7 @@ async function promptConnectCredentials({ existingBot = "", existingSig = "" } =
   return { botToken, signingSecret };
 }
 
-// ── Poll admin/status until Slack.configured === true ──
+// ── Poll /api/channels/summary until slack.configured === true ──
 
 export async function waitForSlackConfigured(
   url,
@@ -211,18 +263,36 @@ export async function waitForSlackConfigured(
     protectionBypassSecret,
     timeoutMs = 180_000,
     pollIntervalMs = isReplay() ? 0 : 3_000,
+    installTokenPrefix = null,
+    mintedAt = null,
   } = {},
 ) {
   const base = url.replace(/\/+$/, "");
-  const endpoint = `${base}/api/admin/status`;
+  const endpoint = `${base}/api/channels/summary`;
   const headers = buildAuthHeaders(adminSecret, protectionBypassSecret);
+
+  debug("waitForSlackConfigured.start", {
+    endpoint,
+    timeoutMs,
+    pollIntervalMs,
+    installTokenPrefix,
+    mintedAt,
+    ageMsAtStart: mintedAt ? Date.now() - mintedAt : null,
+  });
 
   const spin = spinner("Waiting for Slack OAuth to complete in your browser");
   const start = Date.now();
+  let attempt = 0;
   try {
     while (Date.now() - start < timeoutMs) {
-      const configured = await readSlackConfigured(endpoint, headers);
-      if (configured === true) {
+      attempt += 1;
+      const poll = await readSlackConfigured(endpoint, headers);
+      debug("waitForSlackConfigured.poll", {
+        attempt,
+        elapsedMs: Date.now() - start,
+        ...poll,
+      });
+      if (poll.configured === true) {
         spin.succeed("Slack connected");
         return true;
       }
@@ -237,6 +307,7 @@ export async function waitForSlackConfigured(
     return false;
   } catch (err) {
     spin.fail(`Slack status poll failed: ${err?.message ?? err}`);
+    debug("waitForSlackConfigured.error", { error: err?.message ?? String(err) });
     return false;
   }
 }
@@ -247,15 +318,37 @@ async function readSlackConfigured(endpoint, headers) {
       headers,
       signal: AbortSignal.timeout(10_000),
     });
-    if (!res.ok) return null;
-    const body = await res.json().catch(() => null);
-    const slack = body?.channels?.slack;
-    if (slack && typeof slack.configured === "boolean") {
-      return slack.configured;
+    if (!res.ok) {
+      return { configured: null, status: res.status, reason: "non-ok-status" };
     }
-    return null;
-  } catch {
-    return null;
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) {
+      // Next.js serves the admin page HTML with 200 when a route doesn't exist.
+      // Treat that as a configuration error, not "not configured yet".
+      return {
+        configured: null,
+        status: res.status,
+        reason: "non-json-response",
+        contentType,
+      };
+    }
+    const body = await res.json().catch(() => null);
+    const slack = body?.slack;
+    if (slack && typeof slack.configured === "boolean") {
+      return {
+        configured: slack.configured,
+        status: res.status,
+        connected: slack.connected ?? null,
+      };
+    }
+    return {
+      configured: null,
+      status: res.status,
+      reason: "missing-slack-field",
+      bodyKeys: body && typeof body === "object" ? Object.keys(body) : null,
+    };
+  } catch (err) {
+    return { configured: null, status: 0, reason: err?.message ?? String(err) };
   }
 }
 
