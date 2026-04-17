@@ -1,6 +1,6 @@
 {
   "name": "@vercel/vclaw",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "CLI to set up and deploy vercel-openclaw with one command",
   "type": "module",
   "files": [
@@ -14,11 +14,13 @@
     "src/steps/clone.mjs",
     "src/steps/connect-slack.mjs",
     "src/steps/connect-telegram.mjs",
+    "src/steps/create-slack-app.mjs",
     "src/steps/deploy.mjs",
     "src/steps/env.mjs",
     "src/steps/link.mjs",
     "src/steps/prereqs.mjs",
     "src/steps/protection.mjs",
+    "src/steps/provision-slack.mjs",
     "src/steps/run-verify.mjs",
     "src/steps/redis.mjs",
     "src/ui.mjs",

@@ -10,7 +10,7 @@ import { buildManagedEnvVars, pushEnvVars, readLinkedProject } from "../steps/en
 import { deploy } from "../steps/deploy.mjs";
 import { runVerify } from "../steps/run-verify.mjs";
 import { connectTelegram } from "../steps/connect-telegram.mjs";
-import { connectSlack } from "../steps/connect-slack.mjs";
+import { provisionSlack } from "../steps/provision-slack.mjs";
 import {
   configureProjectProtection,
   resolveProtectionPlan,
@@ -145,8 +145,13 @@ export async function create(argv) {
       "protection-bypass-secret": { type: "string" },
       "skip-deploy": { type: "boolean", default: false },
       telegram: { type: "string" },
-      slack: { type: "string" },
+      slack: { type: "boolean", default: false },
+      "slack-bot-token": { type: "string" },
       "slack-signing-secret": { type: "string" },
+      "slack-config-token": { type: "string" },
+      "slack-refresh-token": { type: "string" },
+      "slack-app-name": { type: "string" },
+      "slack-skip": { type: "boolean", default: false },
       yes: { type: "boolean", short: "y", default: false },
     },
   });
@@ -160,22 +165,51 @@ export async function create(argv) {
     throw new Error("--telegram value cannot be empty.");
   }
 
-  if (values.slack && values["skip-deploy"]) {
+  const slackRequested =
+    values.slack ||
+    values["slack-bot-token"] !== undefined ||
+    values["slack-config-token"] !== undefined ||
+    values["slack-refresh-token"] !== undefined ||
+    values["slack-app-name"] !== undefined ||
+    values["slack-signing-secret"] !== undefined ||
+    values["slack-skip"];
+  if (slackRequested && values["skip-deploy"]) {
     throw new Error(
-      "--slack requires a live deployment; it cannot be combined with --skip-deploy.",
+      "--slack flags require a live deployment; they cannot be combined with --skip-deploy.",
     );
   }
-  const slackBotToken = values.slack?.trim();
+  const slackBotToken = values["slack-bot-token"]?.trim();
   const slackSigningSecret = values["slack-signing-secret"]?.trim();
-  if (values.slack !== undefined && !slackBotToken) {
-    throw new Error("--slack value cannot be empty.");
-  }
+  const slackConfigToken = values["slack-config-token"]?.trim();
+  const slackRefreshToken = values["slack-refresh-token"]?.trim();
+  const slackAppName = values["slack-app-name"]?.trim();
   if (values["slack-signing-secret"] !== undefined && !slackSigningSecret) {
     throw new Error("--slack-signing-secret value cannot be empty.");
   }
-  if ((slackBotToken && !slackSigningSecret) || (!slackBotToken && slackSigningSecret)) {
+  if (values["slack-bot-token"] !== undefined && !slackBotToken) {
+    throw new Error("--slack-bot-token value cannot be empty.");
+  }
+  if (values["slack-config-token"] !== undefined && !slackConfigToken) {
+    throw new Error("--slack-config-token value cannot be empty.");
+  }
+  if (slackBotToken && !slackSigningSecret) {
     throw new Error(
-      "--slack and --slack-signing-secret must be passed together (Slack requires both credentials).",
+      "--slack-bot-token requires --slack-signing-secret (Slack needs both for the existing-app flow).",
+    );
+  }
+  if (!slackBotToken && slackSigningSecret) {
+    throw new Error(
+      "--slack-signing-secret requires --slack-bot-token (both are needed to connect an existing Slack app).",
+    );
+  }
+  if (slackConfigToken && slackBotToken) {
+    throw new Error(
+      "--slack-config-token creates a new app; --slack-bot-token connects an existing one. Pick one.",
+    );
+  }
+  if (values["slack-skip"] && (slackConfigToken || slackBotToken || slackRefreshToken || slackAppName)) {
+    throw new Error(
+      "--slack-skip cannot be combined with other --slack-* flags.",
     );
   }
 
@@ -450,40 +484,62 @@ export async function create(argv) {
     }
   }
 
-  // 14. Optionally wire Slack app
+  // 14. Optionally wire Slack app — three-branch flow (create / connect / skip)
   let slackConnected = false;
-  if (slackBotToken && slackSigningSecret) {
-    const res = await connectSlack(verifyUrl, adminSecret, {
-      botToken: slackBotToken,
-      signingSecret: slackSigningSecret,
-      protectionBypassSecret,
-    });
-    slackConnected = res.ok;
-    if (!res.ok) {
-      warn(
-        "Slack app credentials were not saved. The deployment is otherwise healthy — " +
-          "retry from the admin panel or re-run with valid --slack / --slack-signing-secret values.",
-      );
+  let slackBranch = "skip";
+  if (!values["slack-skip"]) {
+    const preselectedBranch = slackConfigToken
+      ? "create"
+      : slackBotToken && slackSigningSecret
+        ? "connect"
+        : null;
+    const shouldInvoke =
+      preselectedBranch !== null ||
+      values.slack ||
+      canPrompt;
+    if (shouldInvoke) {
+      const result = await provisionSlack(verifyUrl, adminSecret, {
+        canPrompt,
+        branch: preselectedBranch,
+        configToken: slackConfigToken,
+        refreshToken: slackRefreshToken,
+        appName: slackAppName,
+        botToken: slackBotToken,
+        signingSecret: slackSigningSecret,
+        protectionBypassSecret,
+      });
+      slackBranch = result.branch;
+      slackConnected = Boolean(result.configured);
+      if (result.branch !== "skip" && !result.ok) {
+        warn(
+          "Slack was not fully connected. The deployment is otherwise healthy — " +
+            "retry from the admin panel or re-run vclaw create with valid --slack-* values.",
+        );
+      }
     }
   }
 
   success(`\nDone! Your OpenClaw instance is live at ${verifyUrl}\n`);
   log("Next steps:");
   log("  • Sign in at the URL above with the ADMIN_SECRET you just entered");
-  if (telegramConnected && slackConnected) {
-    log("  • Telegram and Slack are already wired up");
-    log("  • Open the Slack app's Event Subscriptions page and paste the Request URL shown in the admin panel");
-    log("  • Connect Discord/WhatsApp channels from the admin panel");
-  } else if (telegramConnected) {
+  if (telegramConnected) {
     log("  • Telegram is already wired up — send a message to your bot to test it");
-    log("  • Connect Slack/Discord/WhatsApp channels from the admin panel");
-  } else if (slackConnected) {
+  }
+  if (slackConnected && slackBranch === "create") {
+    log("  • Slack app is created and installed — send a message to your bot to test it");
+  } else if (slackConnected && slackBranch === "connect") {
     log("  • Slack credentials are saved");
     log("  • Open the Slack app's Event Subscriptions page and paste the Request URL shown in the admin panel");
-    log("  • Connect Telegram/Discord/WhatsApp channels from the admin panel");
+  } else if (slackBranch === "create") {
+    log("  • Finish the Slack OAuth install in the browser tab that opened");
+    log("    (you can also reopen it from the Slack panel's Install button)");
   } else {
-    log("  • Connect Slack/Telegram channels from the admin panel");
+    log("  • Connect Slack from the admin panel (three-state card guides you through it)");
   }
+  const remaining = [];
+  if (!telegramConnected) remaining.push("Telegram");
+  remaining.push("Discord", "WhatsApp");
+  log(`  • Connect ${remaining.join("/")} channels from the admin panel`);
   log("  • Retrieve env vars anytime with `vercel env pull` or from");
   log("    Vercel › Project › Settings › Environment Variables");
   if (!protectionBypassSecret) {
