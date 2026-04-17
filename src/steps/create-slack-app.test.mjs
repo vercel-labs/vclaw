@@ -127,6 +127,105 @@ test("createSlackApp returns ok:false on a network error without throwing", asyn
   }
 });
 
+test("createSlackApp retries on 401 and succeeds on a later attempt", async () => {
+  let call = 0;
+  const stub = installFetchStub(() => {
+    call += 1;
+    if (call < 3) {
+      return jsonResponse(401, {
+        error: "UNAUTHORIZED",
+        message: "Authentication required.",
+      });
+    }
+    return jsonResponse(200, {
+      appId: "A1",
+      appName: "VClaw",
+      installUrl: "https://x/y",
+    });
+  });
+  try {
+    const res = await createSlackApp("https://x", "admin", {
+      configToken: "xoxe.xoxp-abc",
+      sleep: async () => {},
+    });
+    assert.equal(res.ok, true);
+    assert.equal(stub.calls.length, 3);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("createSlackApp gives up on 401 after MAX_ATTEMPTS and returns ok:false", async () => {
+  const stub = installFetchStub(() =>
+    jsonResponse(401, {
+      error: "UNAUTHORIZED",
+      message: "Authentication required.",
+    }),
+  );
+  const originalReplay = process.env.VCLAW_REPLAY;
+  process.env.VCLAW_REPLAY = "1";
+  const logs = [];
+  const origLog = console.log;
+  const origErr = console.error;
+  console.log = (msg) => logs.push(String(msg));
+  console.error = (msg) => logs.push(String(msg));
+  try {
+    const res = await createSlackApp("https://openclaw.example/", "admin-xyz", {
+      configToken: "xoxe.xoxp-abc",
+      protectionBypassSecret: "bypass-secret-xyz",
+      sleep: async () => {},
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.status, 401);
+    assert.equal(stub.calls.length, 3);
+    const combined = logs.join("\n");
+    assert.ok(
+      combined.includes("rejected with 401"),
+      "expected rejection line in diagnostics",
+    );
+    assert.ok(
+      combined.includes("POST https://openclaw.example/api/channels/slack/app"),
+      "expected URL in diagnostics",
+    );
+    assert.ok(
+      combined.includes("admin-auth.ts"),
+      "expected openclaw admin-auth attribution in diagnostics",
+    );
+    assert.ok(
+      combined.includes("curl -i"),
+      "expected reproducible curl command in diagnostics",
+    );
+    assert.ok(
+      !combined.includes("admin-xyz") && !combined.includes("bypass-secret-xyz")
+        ? false
+        : true,
+      "curl command should include secrets for user reproducibility",
+    );
+  } finally {
+    console.log = origLog;
+    console.error = origErr;
+    stub.restore();
+  }
+});
+
+test("createSlackApp does not retry on non-401 errors", async () => {
+  const stub = installFetchStub(() =>
+    jsonResponse(400, {
+      error: { code: "TOKEN_EXPIRED", message: "Config token is expired." },
+    }),
+  );
+  try {
+    const res = await createSlackApp("https://x", "admin", {
+      configToken: "xoxe.xoxp-old",
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.status, 400);
+    assert.equal(stub.calls.length, 1);
+  } finally {
+    stub.restore();
+  }
+});
+
 test("createSlackApp validates required arguments", async () => {
   await assert.rejects(
     () => createSlackApp("", "admin", { configToken: "xoxe.xoxp-abc" }),
