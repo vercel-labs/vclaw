@@ -1,6 +1,7 @@
 import { debug } from "../debug.mjs";
 import { isReplay } from "../tape.mjs";
-import { vercelExec, vercelJson } from "../vercel.mjs";
+import { vercelExec } from "../vercel.mjs";
+import { listProjectEnvs, readVercelToken } from "../vercel-api.mjs";
 import { spinner, step, success, warn } from "../ui.mjs";
 
 /**
@@ -19,11 +20,20 @@ export function findRedisEnvKey(envPayload) {
   return null;
 }
 
-async function readRedisEnvs(projectDir, scope) {
-  return vercelJson(["env", "ls", "--format", "json"], {
-    cwd: projectDir,
-    scope,
-  });
+async function readRedisEnvs(linked) {
+  const token = readVercelToken();
+  if (!token) {
+    throw new Error(
+      "Could not read Vercel auth token. Run `vercel login` and retry."
+    );
+  }
+  if (!linked?.projectId) {
+    throw new Error(
+      "Project is not linked yet. Cannot read env vars without a projectId."
+    );
+  }
+  const envs = await listProjectEnvs(token, linked.projectId, linked.teamId);
+  return { envs };
 }
 
 export async function waitForRedisEnvs({
@@ -51,10 +61,10 @@ export async function waitForRedisEnvs({
   return false;
 }
 
-export async function provisionRedis(projectDir, scope, yes = false) {
+export async function provisionRedis(projectDir, scope, linked, yes = false) {
   step("Provisioning Redis via Vercel Marketplace");
 
-  const envPayload = await readRedisEnvs(projectDir, scope);
+  const envPayload = await readRedisEnvs(linked);
   if (hasRedisEnvVars(envPayload)) {
     success("Redis already provisioned");
     return;
@@ -95,7 +105,7 @@ export async function provisionRedis(projectDir, scope, yes = false) {
   );
 
   const ready = await waitForRedisEnvs({
-    read: () => readRedisEnvs(projectDir, scope),
+    read: () => readRedisEnvs(linked),
     onTick: (attempt) => debug(`redis poll attempt ${attempt}: not ready yet`),
     intervalMs: isReplay() ? 0 : 3000,
   });

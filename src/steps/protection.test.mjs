@@ -7,22 +7,22 @@ test("resolveProtectionPlan leaves protection disabled by default", () => {
   assert.deepEqual(plan, {
     mode: "none",
     enableBypass: false,
-    bypassSecret: undefined,
+    providedBypassSecret: undefined,
   });
 });
 
-test("resolveProtectionPlan generates a bypass secret when protection is enabled", () => {
+test("resolveProtectionPlan enables bypass when protection is set", () => {
   const plan = resolveProtectionPlan("sso");
   assert.equal(plan.mode, "sso");
   assert.equal(plan.enableBypass, true);
-  assert.match(plan.bypassSecret, /^[a-f0-9]{48}$/);
+  assert.equal(plan.providedBypassSecret, undefined);
 });
 
-test("resolveProtectionPlan preserves an explicit bypass secret", () => {
+test("resolveProtectionPlan preserves an explicit bypass secret hint", () => {
   const plan = resolveProtectionPlan("none", "my-secret");
   assert.deepEqual(plan, {
     mode: "none",
     enableBypass: true,
-    bypassSecret: "my-secret",
+    providedBypassSecret: "my-secret",
   });
 });

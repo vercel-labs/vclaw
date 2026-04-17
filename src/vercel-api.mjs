@@ -5,27 +5,41 @@ import { debug } from "./debug.mjs";
 
 const API = "https://api.vercel.com";
 
-function configPath() {
+// Candidate dirs where Vercel CLI might store its auth/config files, in
+// preferred-first order. Vercel CLI 50+ moved macOS storage from
+// ~/Library/Application Support/com.vercel.cli to the XDG path
+// (~/.local/share/com.vercel.cli), so we check the XDG path first on every
+// platform and keep the platform-specific legacy path as a fallback.
+function vercelCliDirs() {
+  const dirs = [];
+  const xdg = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+  dirs.push(join(xdg, "com.vercel.cli"));
   if (platform() === "darwin") {
-    return join(
-      homedir(),
-      "Library",
-      "Application Support",
-      "com.vercel.cli",
-      "config.json"
+    dirs.push(
+      join(homedir(), "Library", "Application Support", "com.vercel.cli"),
     );
+  } else if (platform() === "win32" && process.env.APPDATA) {
+    dirs.push(join(process.env.APPDATA, "com.vercel.cli"));
   }
-  if (platform() === "win32") {
-    if (process.env.APPDATA) {
-      return join(process.env.APPDATA, "com.vercel.cli", "config.json");
+  return dirs;
+}
+
+function findExistingVercelFile(name) {
+  for (const dir of vercelCliDirs()) {
+    const path = join(dir, name);
+    try {
+      readFileSync(path, "utf8");
+      return path;
+    } catch {
+      // try next
     }
   }
-  const xdg = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
-  return join(xdg, "com.vercel.cli", "config.json");
+  return null;
 }
 
 export function setActiveTeam(teamId) {
-  const path = configPath();
+  const path = findExistingVercelFile("config.json");
+  if (!path) return false;
   let config;
   try {
     config = JSON.parse(readFileSync(path, "utf8"));
@@ -47,24 +61,9 @@ export function setActiveTeam(teamId) {
 
 export function readVercelToken() {
   if (process.env.VERCEL_TOKEN) return process.env.VERCEL_TOKEN;
-
-  const candidates = [];
-  if (platform() === "darwin") {
-    candidates.push(
-      join(homedir(), "Library", "Application Support", "com.vercel.cli", "auth.json")
-    );
-  } else if (platform() === "win32") {
-    if (process.env.APPDATA) {
-      candidates.push(join(process.env.APPDATA, "com.vercel.cli", "auth.json"));
-    }
-  } else {
-    const xdg = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
-    candidates.push(join(xdg, "com.vercel.cli", "auth.json"));
-  }
-
-  for (const path of candidates) {
+  for (const dir of vercelCliDirs()) {
     try {
-      const raw = JSON.parse(readFileSync(path, "utf8"));
+      const raw = JSON.parse(readFileSync(join(dir, "auth.json"), "utf8"));
       if (raw?.token) return raw.token;
     } catch {
       // try next

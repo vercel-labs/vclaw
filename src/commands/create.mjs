@@ -353,13 +353,11 @@ export async function create(argv) {
   const linked = await linkProject(projectDir, name, scope);
 
   // 7. Provision Redis via Vercel Marketplace
-  await provisionRedis(projectDir, scope, values.yes);
+  await provisionRedis(projectDir, scope, linked, values.yes);
 
   // 8. Configure project protection when requested
   let { protectionBypassSecret } = await configureProjectProtection(
-    projectDir,
-    name,
-    scope,
+    linked,
     protectionPlan
   );
 
