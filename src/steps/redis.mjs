@@ -104,7 +104,7 @@ export async function provisionRedis(projectDir, scope, yes = false) {
     spin.fail("REDIS_URL never appeared");
     throw new Error(
       "Timed out waiting for REDIS_URL to appear. " +
-        "Confirm the Redis database was created in the browser, then rerun `vclaw init`."
+        "Confirm the Redis database was created in the browser, then rerun `vclaw create`."
     );
   }
 

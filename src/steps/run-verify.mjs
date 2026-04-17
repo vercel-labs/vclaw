@@ -1,5 +1,5 @@
 import { isReplay } from "../tape.mjs";
-import { spinner, step, success, warn, fail, log, dim } from "../ui.mjs";
+import { spinner, warn, fail, log, dim } from "../ui.mjs";
 
 /**
  * Poll preflight, then run launch verification against a live deployment.
@@ -38,15 +38,30 @@ export async function runVerify(
   }
 
   // 2. Run preflight check
-  step("Running preflight check");
-  const preflight = await fetchJson(`${base}/api/admin/preflight`, {
-    headers: authHeaders,
-  });
+  const preflightSpin = spinner("Running preflight check — 0s");
+  const preflightStart = Date.now();
+  const preflightTick = setInterval(() => {
+    const s = Math.round((Date.now() - preflightStart) / 1000);
+    preflightSpin.update(`Running preflight check — ${s}s`);
+  }, 500);
+  let preflight;
+  try {
+    preflight = await fetchJson(`${base}/api/admin/preflight`, {
+      headers: authHeaders,
+    });
+    if (preflight.ok) {
+      preflightSpin.succeed("Preflight passed");
+    } else {
+      preflightSpin.fail("Preflight has issues");
+    }
+  } catch (err) {
+    preflightSpin.fail("Preflight failed");
+    throw err;
+  } finally {
+    clearInterval(preflightTick);
+  }
 
-  if (preflight.ok) {
-    success("Preflight passed");
-  } else {
-    warn("Preflight has issues:");
+  if (!preflight.ok) {
     for (const action of preflight.actions ?? []) {
       if (action.status === "fail") {
         fail(`  ${action.id}: ${action.message}`);
@@ -57,16 +72,30 @@ export async function runVerify(
   }
 
   // 3. Launch verification (safe mode by default)
-  step(`Running launch verification${destructive ? " (destructive)" : ""}`);
+  const verifyLabel = `Running launch verification${destructive ? " (destructive)" : ""}`;
+  const verifySpin = spinner(`${verifyLabel} — 0s`);
+  const verifyStart = Date.now();
+  const verifyTick = setInterval(() => {
+    const s = Math.round((Date.now() - verifyStart) / 1000);
+    verifySpin.update(`${verifyLabel} — ${s}s${verifyHint(s)}`);
+  }, 500);
   const verifyEndpoint = `${base}/api/admin/launch-verify`;
-  const verifyRes = await fetch(verifyEndpoint, {
-    method: "POST",
-    headers: {
-      ...authHeaders,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ destructive }),
-  });
+  let verifyRes;
+  try {
+    verifyRes = await fetch(verifyEndpoint, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ destructive }),
+    });
+  } catch (err) {
+    verifySpin.fail("Launch verification failed");
+    clearInterval(verifyTick);
+    throw err;
+  }
+  clearInterval(verifyTick);
 
   // Read body as text first — the endpoint can return 204/empty or an HTML
   // error page. Calling res.json() directly crashes on either.
@@ -81,7 +110,7 @@ export async function runVerify(
   }
 
   if (!verifyRes.ok) {
-    fail(`Launch verification returned ${verifyRes.status}`);
+    verifySpin.fail(`Launch verification returned ${verifyRes.status}`);
     const hint = describeVerifyFailure(verifyRes.status, raw, result);
     if (hint) warn(hint);
     if (raw) log(dim(truncate(raw, 800)));
@@ -90,10 +119,7 @@ export async function runVerify(
   }
 
   if (result === null) {
-    // 2xx with empty/non-JSON body. The admin handler is supposed to return
-    // a JSON payload; an empty body usually means the runtime died between
-    // phases. Treat as failure so the caller doesn't silently move on.
-    fail(
+    verifySpin.fail(
       "Launch verification returned a non-JSON response (empty or unexpected content)."
     );
     if (raw) log(dim(truncate(raw, 800)));
@@ -102,13 +128,25 @@ export async function runVerify(
   }
 
   if (result.ok) {
-    success("Launch verification passed");
+    verifySpin.succeed("Launch verification passed");
   } else {
-    warn("Launch verification returned issues");
+    verifySpin.fail("Launch verification returned issues");
     log(dim(JSON.stringify(result, null, 2)));
   }
 
   return result;
+}
+
+function verifyHint(elapsed) {
+  // These are time-bucket labels, not real phase events — the endpoint
+  // returns one JSON payload at the end. Buckets are calibrated to a typical
+  // first-boot: the sandbox launches in a couple seconds, then the long
+  // stretch is `npm install` of OpenClaw, then probes, then finalizing.
+  if (elapsed < 3) return " · launching sandbox";
+  if (elapsed < 55) return " · installing OpenClaw from npm";
+  if (elapsed < 80) return " · running launch probes";
+  if (elapsed < 120) return " · finalizing";
+  return " · still working";
 }
 
 function truncate(text, max) {

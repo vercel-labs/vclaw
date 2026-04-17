@@ -9,8 +9,8 @@ import { debug } from "./debug.mjs";
  *   - interactive prompts (readline)
  *
  * Usage:
- *   VCLAW_RECORD=.vclaw-tape.json  npx vclaw init  # capture a tape
- *   VCLAW_REPLAY=.vclaw-tape.json  npx vclaw init  # replay without touching anything real
+ *   VCLAW_RECORD=.vclaw-tape.json  npx vclaw create  # capture a tape
+ *   VCLAW_REPLAY=.vclaw-tape.json  npx vclaw create  # replay without touching anything real
  *
  * Matching is strict-ordered across all kinds: the Nth taped event must match
  * the Nth call. If the code path changes, re-record.

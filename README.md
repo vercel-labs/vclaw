@@ -23,14 +23,14 @@
 Run without installing:
 
 ```bash
-npx @vercel/vclaw init --scope my-team
+npx @vercel/vclaw create --scope my-team
 ```
 
 Or install globally:
 
 ```bash
 npm i -g @vercel/vclaw
-vclaw init --scope my-team
+vclaw create --scope my-team
 ```
 
 ## Prerequisites
@@ -51,7 +51,7 @@ vclaw doctor
 Deploy OpenClaw into a Vercel team:
 
 ```bash
-npx @vercel/vclaw init --scope my-team
+npx @vercel/vclaw create --scope my-team
 ```
 
 This will:
@@ -62,7 +62,7 @@ This will:
 4. create and link a Vercel project (prompts if the default name is taken)
 5. provision Redis via the Vercel Marketplace (Redis Cloud)
 6. optionally configure Vercel Deployment Protection
-7. generate or reuse an `ADMIN_SECRET`
+7. prompt for the `ADMIN_SECRET` (the admin-dashboard password)
 8. push managed env vars (`ADMIN_SECRET`, `CRON_SECRET`, `VERCEL_AUTOMATION_BYPASS_SECRET`)
 9. deploy to production
 10. run launch verification against the new deployment
@@ -72,50 +72,52 @@ This will:
 Basic deploy:
 
 ```bash
-vclaw init --scope my-team
+vclaw create --scope my-team
 ```
 
 Choose a project name and target directory:
 
 ```bash
-vclaw init --scope my-team --name my-openclaw --dir ~/dev/my-openclaw
+vclaw create --scope my-team --name my-openclaw --dir ~/dev/my-openclaw
 ```
 
 Use your own admin secret:
 
 ```bash
-vclaw init --scope my-team --admin-secret "$(openssl rand -hex 32)"
+vclaw create --scope my-team --admin-secret "$(openssl rand -hex 32)"
 ```
 
 Set a dedicated cron secret:
 
 ```bash
-vclaw init --scope my-team --cron-secret "$(openssl rand -hex 32)"
+vclaw create --scope my-team --cron-secret "$(openssl rand -hex 32)"
 ```
 
 Enable deployment protection and configure webhook bypass automatically:
 
 ```bash
-vclaw init --scope my-team --deployment-protection sso
+vclaw create --scope my-team --deployment-protection sso
 ```
 
 Or password protection:
 
 ```bash
-vclaw init --scope my-team --deployment-protection password
+vclaw create --scope my-team --deployment-protection password
 ```
 
 Prepare everything but stop before deploy:
 
 ```bash
-vclaw init --scope my-team --skip-deploy
+vclaw create --scope my-team --skip-deploy
 ```
 
 ## Commands
 
-### `vclaw init`
+### `vclaw create`
 
 Full setup from zero to deployed.
+
+> When invoked interactively without `--admin-secret`, `vclaw create` prompts for the admin-dashboard password (masked, confirmed) — this is the value the user will later type into the deployed admin UI, so it isn't auto-generated.
 
 ```text
 --name <name>                      Vercel project name (default: openclaw)
@@ -134,7 +136,7 @@ Notes:
 
 - `--yes` does not bypass first-time marketplace terms acceptance if the integration requires a browser step.
 - `--deployment-protection` also injects `VERCEL_AUTOMATION_BYPASS_SECRET` so protected incoming webhooks can still reach OpenClaw.
-- if you do not pass `--admin-secret`, `vclaw` generates one for you.
+- `ADMIN_SECRET` is the password you'll type into the deployed admin dashboard. When running interactively without `--admin-secret`, `vclaw create` prompts for it (masked, confirmed). Pass `--admin-secret <value>` for non-interactive runs.
 
 ### `vclaw verify`
 

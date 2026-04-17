@@ -64,7 +64,7 @@ export async function checkPrereqs() {
     success(`authenticated as ${whoami.stdout.trim()}`);
   } else {
     warn(
-      "Not authenticated yet. `vclaw init` will rely on `vercel login` or VERCEL_TOKEN when it needs access."
+      "Not authenticated yet. `vclaw create` will rely on `vercel login` or VERCEL_TOKEN when it needs access."
     );
   }
 }

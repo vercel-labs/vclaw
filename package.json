@@ -1,12 +1,12 @@
 {
   "name": "@vercel/vclaw",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "CLI to set up and deploy vercel-openclaw with one command",
   "type": "module",
   "files": [
     "bin/vclaw.mjs",
     "src/commands/doctor.mjs",
-    "src/commands/init.mjs",
+    "src/commands/create.mjs",
     "src/commands/verify.mjs",
     "src/debug.mjs",
     "src/shell.mjs",

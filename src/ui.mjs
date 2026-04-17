@@ -150,3 +150,62 @@ export async function prompt(question, defaultValue = "") {
     cleanup();
   }
 }
+
+export async function promptMasked(question) {
+  if (isReplay()) {
+    const taped = replayEvent("prompt", question);
+    return taped ?? "";
+  }
+  if (!isInteractive()) {
+    throw new Error(`${question}: masked input requires an interactive terminal`);
+  }
+  const stdin = process.stdin;
+  if (typeof stdin.setRawMode !== "function") {
+    throw new Error(`${question}: stdin is not a TTY — cannot mask input`);
+  }
+
+  process.stdout.write(`${c(CYAN, "?")} ${question}: `);
+
+  const wasRaw = stdin.isRaw;
+  stdin.setRawMode(true);
+  stdin.resume();
+  stdin.setEncoding("utf8");
+
+  let buffer = "";
+  return new Promise((resolvePromise) => {
+    const cleanup = () => {
+      stdin.removeListener("data", onData);
+      if (!wasRaw) stdin.setRawMode(false);
+      stdin.pause();
+    };
+    const onData = (chunk) => {
+      for (const ch of chunk) {
+        const code = ch.charCodeAt(0);
+        if (ch === "\r" || ch === "\n") {
+          process.stdout.write("\n");
+          cleanup();
+          if (isRecord()) recordEvent("prompt", question, buffer);
+          resolvePromise(buffer);
+          return;
+        }
+        if (code === 3) {
+          cleanup();
+          process.stdout.write("\n");
+          console.error(c(YELLOW, "Cancelled."));
+          process.exit(130);
+        }
+        if (code === 127 || code === 8) {
+          if (buffer.length > 0) {
+            buffer = buffer.slice(0, -1);
+            process.stdout.write("\b \b");
+          }
+          continue;
+        }
+        if (code < 32) continue;
+        buffer += ch;
+        process.stdout.write("*");
+      }
+    };
+    stdin.on("data", onData);
+  });
+}

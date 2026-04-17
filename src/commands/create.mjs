@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -30,7 +29,7 @@ import {
   readVercelToken,
   setActiveTeam,
 } from "../vercel-api.mjs";
-import { isInteractive, log, prompt, step, success, warn } from "../ui.mjs";
+import { isInteractive, log, prompt, promptMasked, step, success, warn } from "../ui.mjs";
 
 const DEFAULT_NAME = "vercel-openclaw";
 const DEFAULT_DIR = "./vercel-openclaw";
@@ -130,7 +129,7 @@ function findAvailableDir(base) {
   return `${base}-${Date.now()}`;
 }
 
-export async function init(argv) {
+export async function create(argv) {
   const { values } = parseArgs({
     args: argv,
     options: {
@@ -161,7 +160,7 @@ export async function init(argv) {
     values["protection-bypass-secret"]
   );
 
-  log("vclaw init — setting up vercel-openclaw\n");
+  log("vclaw create — setting up vercel-openclaw\n");
 
   // 1. Check local prereqs
   await checkPrereqs();
@@ -317,7 +316,7 @@ export async function init(argv) {
             token,
             linked.projectId,
             linked.teamId,
-            { note: "vclaw init auto-detected protection" }
+            { note: "vclaw create auto-detected protection" }
           );
           protectionBypassSecret = secret;
           success(
@@ -332,16 +331,32 @@ export async function init(argv) {
     }
   }
 
-  // 9. Resolve admin secret (prompt with a generated default)
+  // 9. Resolve admin secret — this is the password the user will type
+  // into the deployed vercel-openclaw admin dashboard, so we prompt for
+  // a chosen value (masked, confirmed) rather than generating one.
   let resolvedAdminSecret = values["admin-secret"];
   if (!resolvedAdminSecret) {
-    const generated = randomBytes(32).toString("hex");
-    resolvedAdminSecret = canPrompt
-      ? await prompt(
-          "ADMIN_SECRET (press Enter to use the generated one)",
-          generated
-        )
-      : generated;
+    if (!canPrompt) {
+      throw new Error(
+        "ADMIN_SECRET is required in non-interactive mode. Pass --admin-secret <value>."
+      );
+    }
+    step("Setting ADMIN_SECRET");
+    log("  This is the password for your admin dashboard login.");
+    log("  Pick something memorable — you'll type it every time you sign in.");
+    while (true) {
+      const first = await promptMasked("Enter ADMIN_SECRET");
+      if (!first) {
+        warn("Cannot be empty — try again");
+        continue;
+      }
+      const second = await promptMasked("Confirm ADMIN_SECRET");
+      if (first === second) {
+        resolvedAdminSecret = first;
+        break;
+      }
+      warn("Passwords did not match — try again");
+    }
   }
 
   // 10. Generate and push env vars
@@ -384,15 +399,12 @@ export async function init(argv) {
   // 12. Verify
   await runVerify(verifyUrl, adminSecret, { protectionBypassSecret });
 
-  success(`\nDone! Your OpenClaw instance is live at ${verifyUrl}`);
-  log(`Admin secret: ${adminSecret}`);
-  if (protectionBypassSecret) {
-    log(`Protection bypass secret: ${protectionBypassSecret}`);
-  }
-  log("Save this secret — it won't be shown again.\n");
+  success(`\nDone! Your OpenClaw instance is live at ${verifyUrl}\n`);
   log("Next steps:");
-  log("  • Open the admin UI at the URL above");
+  log("  • Sign in at the URL above with the ADMIN_SECRET you just entered");
   log("  • Connect Slack/Telegram channels from the admin panel");
+  log("  • Retrieve env vars anytime with `vercel env pull` or from");
+  log("    Vercel › Project › Settings › Environment Variables");
   if (!protectionBypassSecret) {
     log("  • If you later enable Vercel Deployment Protection, also set VERCEL_AUTOMATION_BYPASS_SECRET");
   }

@@ -3,7 +3,7 @@
 import { installFetchShim, mode as tapeMode, scrubTapeFile } from "../src/tape.mjs";
 installFetchShim();
 
-import { init } from "../src/commands/init.mjs";
+import { create } from "../src/commands/create.mjs";
 import { verify } from "../src/commands/verify.mjs";
 import { doctor } from "../src/commands/doctor.mjs";
 import { setDebug } from "../src/debug.mjs";
@@ -12,17 +12,17 @@ const usage = `
   vclaw - set up and deploy vercel-openclaw with one command
 
   Usage:
-    vclaw init   [options]       Clone, provision, and deploy openclaw
+    vclaw create [options]       Clone, provision, and deploy openclaw
     vclaw verify [options]       Run launch verification against a deployment
     vclaw doctor                 Check local prerequisites and project health
     vclaw tape scrub <path>      Redact secrets from a record/replay tape file
 
-  Init options:
+  Create options:
     --name <name>            Vercel project name (prompted; default: vercel-openclaw)
     --scope <scope>          Vercel team scope
     --team <slug>            Deprecated alias for --scope
     --dir <path>             Clone destination (prompted; default: ./vercel-openclaw)
-    --admin-secret <hex>     Use a specific admin secret (auto-generated if omitted)
+    --admin-secret <secret>  Admin dashboard password (prompted masked + confirmed when omitted interactively; required non-interactively)
     --cron-secret <hex>      Optional dedicated cron secret
     --deployment-protection <none|sso|password>
                               Optional Vercel deployment protection mode
@@ -86,7 +86,7 @@ if (command === "tape") {
   }
 }
 
-const commands = { init, verify, doctor };
+const commands = { create, verify, doctor };
 const handler = commands[command];
 
 if (!handler) {

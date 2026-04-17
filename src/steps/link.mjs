@@ -53,7 +53,7 @@ export async function linkProject(projectDir, name, scope) {
         if (/409/.test(err.message) && /already exists/i.test(err.message)) {
           throw new Error(
             `A project named "${name}" already exists in another team you can access. ` +
-              `Pick a different name and rerun \`vclaw init\` (or pass --name).`
+              `Pick a different name and rerun \`vclaw create\` (or pass --name).`
           );
         }
         throw err;

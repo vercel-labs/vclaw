@@ -20,7 +20,7 @@ export function exec(cmd, args = [], opts = {}) {
     return Promise.resolve(taped);
   }
   return new Promise((resolve, reject) => {
-    const { input, env, cwd } = opts;
+    const { input, env, cwd, onLine } = opts;
     const startedAt = Date.now();
     debug(`exec ${cmd} ${args.join(" ")}`, cwd ? { cwd } : undefined);
     const child = nodeSpawn(cmd, args, {
@@ -32,6 +32,23 @@ export function exec(cmd, args = [], opts = {}) {
     let stdout = "";
     let stderr = "";
 
+    const makeLineEmitter = (which) => {
+      let leftover = "";
+      return (chunk) => {
+        const text = chunk.toString();
+        if (which === "stdout") stdout += text;
+        else stderr += text;
+        if (!onLine) return;
+        const combined = leftover + text;
+        const lines = combined.split(/\r?\n/);
+        leftover = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed) onLine(trimmed, which);
+        }
+      };
+    };
+
     child.on("error", (err) => {
       if (err && err.code === "ENOENT") {
         reject(new Error(`Command not found: ${cmd}`));
@@ -40,13 +57,8 @@ export function exec(cmd, args = [], opts = {}) {
       reject(err);
     });
 
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
+    child.stdout.on("data", makeLineEmitter("stdout"));
+    child.stderr.on("data", makeLineEmitter("stderr"));
 
     child.on("close", (code) => {
       const ms = Date.now() - startedAt;
