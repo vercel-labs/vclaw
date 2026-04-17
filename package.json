@@ -12,6 +12,8 @@
     "src/shell.mjs",
     "src/tape.mjs",
     "src/steps/clone.mjs",
+    "src/steps/connect-slack.mjs",
+    "src/steps/connect-telegram.mjs",
     "src/steps/deploy.mjs",
     "src/steps/env.mjs",
     "src/steps/link.mjs",

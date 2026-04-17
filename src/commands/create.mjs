@@ -9,6 +9,8 @@ import { provisionRedis } from "../steps/redis.mjs";
 import { buildManagedEnvVars, pushEnvVars, readLinkedProject } from "../steps/env.mjs";
 import { deploy } from "../steps/deploy.mjs";
 import { runVerify } from "../steps/run-verify.mjs";
+import { connectTelegram } from "../steps/connect-telegram.mjs";
+import { connectSlack } from "../steps/connect-slack.mjs";
 import {
   configureProjectProtection,
   resolveProtectionPlan,
@@ -142,9 +144,40 @@ export async function create(argv) {
       "deployment-protection": { type: "string", default: "none" },
       "protection-bypass-secret": { type: "string" },
       "skip-deploy": { type: "boolean", default: false },
+      telegram: { type: "string" },
+      slack: { type: "string" },
+      "slack-signing-secret": { type: "string" },
       yes: { type: "boolean", short: "y", default: false },
     },
   });
+
+  if (values.telegram && values["skip-deploy"]) {
+    throw new Error(
+      "--telegram requires a live deployment; it cannot be combined with --skip-deploy.",
+    );
+  }
+  if (values.telegram !== undefined && values.telegram.trim().length === 0) {
+    throw new Error("--telegram value cannot be empty.");
+  }
+
+  if (values.slack && values["skip-deploy"]) {
+    throw new Error(
+      "--slack requires a live deployment; it cannot be combined with --skip-deploy.",
+    );
+  }
+  const slackBotToken = values.slack?.trim();
+  const slackSigningSecret = values["slack-signing-secret"]?.trim();
+  if (values.slack !== undefined && !slackBotToken) {
+    throw new Error("--slack value cannot be empty.");
+  }
+  if (values["slack-signing-secret"] !== undefined && !slackSigningSecret) {
+    throw new Error("--slack-signing-secret value cannot be empty.");
+  }
+  if ((slackBotToken && !slackSigningSecret) || (!slackBotToken && slackSigningSecret)) {
+    throw new Error(
+      "--slack and --slack-signing-secret must be passed together (Slack requires both credentials).",
+    );
+  }
 
   if (values.team && values.scope && values.team !== values.scope) {
     throw new Error("Pass only one of --scope or deprecated --team.");
@@ -399,10 +432,58 @@ export async function create(argv) {
   // 12. Verify
   await runVerify(verifyUrl, adminSecret, { protectionBypassSecret });
 
+  // 13. Optionally wire Telegram bot
+  let telegramConnected = false;
+  if (values.telegram) {
+    const res = await connectTelegram(
+      verifyUrl,
+      adminSecret,
+      values.telegram.trim(),
+      { protectionBypassSecret },
+    );
+    telegramConnected = res.ok;
+    if (!res.ok) {
+      warn(
+        "Telegram bot was not connected. The deployment is otherwise healthy — " +
+          "retry from the admin panel or re-run with a valid --telegram value.",
+      );
+    }
+  }
+
+  // 14. Optionally wire Slack app
+  let slackConnected = false;
+  if (slackBotToken && slackSigningSecret) {
+    const res = await connectSlack(verifyUrl, adminSecret, {
+      botToken: slackBotToken,
+      signingSecret: slackSigningSecret,
+      protectionBypassSecret,
+    });
+    slackConnected = res.ok;
+    if (!res.ok) {
+      warn(
+        "Slack app credentials were not saved. The deployment is otherwise healthy — " +
+          "retry from the admin panel or re-run with valid --slack / --slack-signing-secret values.",
+      );
+    }
+  }
+
   success(`\nDone! Your OpenClaw instance is live at ${verifyUrl}\n`);
   log("Next steps:");
   log("  • Sign in at the URL above with the ADMIN_SECRET you just entered");
-  log("  • Connect Slack/Telegram channels from the admin panel");
+  if (telegramConnected && slackConnected) {
+    log("  • Telegram and Slack are already wired up");
+    log("  • Open the Slack app's Event Subscriptions page and paste the Request URL shown in the admin panel");
+    log("  • Connect Discord/WhatsApp channels from the admin panel");
+  } else if (telegramConnected) {
+    log("  • Telegram is already wired up — send a message to your bot to test it");
+    log("  • Connect Slack/Discord/WhatsApp channels from the admin panel");
+  } else if (slackConnected) {
+    log("  • Slack credentials are saved");
+    log("  • Open the Slack app's Event Subscriptions page and paste the Request URL shown in the admin panel");
+    log("  • Connect Telegram/Discord/WhatsApp channels from the admin panel");
+  } else {
+    log("  • Connect Slack/Telegram channels from the admin panel");
+  }
   log("  • Retrieve env vars anytime with `vercel env pull` or from");
   log("    Vercel › Project › Settings › Environment Variables");
   if (!protectionBypassSecret) {

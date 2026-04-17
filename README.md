@@ -111,6 +111,24 @@ Prepare everything but stop before deploy:
 vclaw create --scope my-team --skip-deploy
 ```
 
+Wire up a Telegram bot as part of the same run:
+
+```bash
+vclaw create --scope my-team --telegram "123456:AA...BotFatherToken"
+```
+
+This calls `PUT /api/channels/telegram` on the freshly deployed instance after launch verification passes. The app validates the token via Telegram's `getMe`, generates a webhook secret, and registers the Vercel URL with Telegram — no further admin-panel clicks needed. `--telegram` is mutually exclusive with `--skip-deploy`.
+
+Wire up a Slack app at the same time:
+
+```bash
+vclaw create --scope my-team \
+  --slack "xoxb-..." \
+  --slack-signing-secret "abcd1234..."
+```
+
+This calls `PUT /api/channels/slack` after verify, which validates the bot token via Slack's `auth.test` and persists both the bot token and signing secret so the app can verify incoming events. You still have to paste the Request URL shown in the admin panel into your Slack app's Event Subscriptions page — Slack has no API for that outside the OAuth install flow. `--slack` and `--slack-signing-secret` must be passed together, and both are mutually exclusive with `--skip-deploy`.
+
 ## Commands
 
 ### `vclaw create`
@@ -129,6 +147,9 @@ Full setup from zero to deployed.
 --deployment-protection <mode>     Optional protection mode: none | sso | password
 --protection-bypass-secret <s>     Optional automation bypass secret
 --skip-deploy                      Stop after provisioning
+--telegram <botToken>              Wire a Telegram bot after verify passes
+--slack <botToken>                 Wire a Slack bot token (requires --slack-signing-secret)
+--slack-signing-secret <secret>    Slack signing secret (paired with --slack)
 --yes                              Skip confirmation prompts where possible
 ```
 
