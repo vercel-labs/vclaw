@@ -178,6 +178,23 @@ export async function updateProject(token, projectId, teamId, patch) {
   return body;
 }
 
+/**
+ * Probe project names one at a time via GET /v9/projects/{name} (404 = free).
+ * Much faster than paginating `listProjects` in scopes with thousands of
+ * projects, which is ~15 sequential API calls. Returns the first free name
+ * and whether the base was taken (for warning messaging).
+ */
+export async function findAvailableProjectName(token, base, teamId, { maxAttempts = 50 } = {}) {
+  const first = await getProject(token, base, teamId);
+  if (!first) return { name: base, baseTaken: false };
+  for (let i = 2; i < 2 + maxAttempts; i += 1) {
+    const candidate = `${base}-${i}`;
+    const hit = await getProject(token, candidate, teamId);
+    if (!hit) return { name: candidate, baseTaken: true };
+  }
+  return { name: `${base}-${Date.now()}`, baseTaken: true };
+}
+
 export async function listProjects(token, { teamId, ownerId } = {}) {
   const names = new Set();
   let until;

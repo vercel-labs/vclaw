@@ -15,17 +15,14 @@ import {
   configureProjectProtection,
   resolveProtectionPlan,
 } from "../steps/protection.mjs";
-import {
-  findAvailableName,
-  validateProjectName,
-} from "../vercel.mjs";
+import { validateProjectName } from "../vercel.mjs";
 import {
   ensureAutomationBypassSecret,
+  findAvailableProjectName,
   getProductionAlias,
   getProject,
   getTeamBySlug,
   getUser,
-  listProjects,
   listTeams,
   readProtectionState,
   readVercelToken,
@@ -310,18 +307,21 @@ export async function create(argv) {
     let suggested = DEFAULT_NAME;
     try {
       const token = readVercelToken();
-      // Query the actual target team so we don't suggest a name that already
-      // exists in that team (which would silently reuse a stale project with
-      // inherited env vars). Falls back to the token's default scope if we
-      // don't have a teamId yet.
-      const taken = token
-        ? await listProjects(token, { teamId: pickedTeamId })
-        : new Set();
-      suggested = findAvailableName(DEFAULT_NAME, taken);
-      if (taken && taken.has(DEFAULT_NAME) && canPrompt) {
-        warn(
-          `A Vercel project named "${DEFAULT_NAME}" already exists in ${activeSlug || "this scope"} — suggesting "${suggested}".`
+      // Probe GET /v9/projects/{name} per candidate and early-exit on 404.
+      // Faster than paginating every project in the team (thousands of
+      // projects in vercel-labs) just to check one name.
+      if (token) {
+        const { name: picked, baseTaken } = await findAvailableProjectName(
+          token,
+          DEFAULT_NAME,
+          pickedTeamId
         );
+        suggested = picked;
+        if (baseTaken && canPrompt) {
+          warn(
+            `A Vercel project named "${DEFAULT_NAME}" already exists in ${activeSlug || "this scope"} — suggesting "${suggested}".`
+          );
+        }
       }
     } catch {
       // ignore — fall back to default and let prompts/link surface issues

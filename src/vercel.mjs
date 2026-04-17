@@ -64,15 +64,6 @@ export function extractDeploymentUrl(stdout) {
   );
 }
 
-export function findAvailableName(base, taken) {
-  if (!taken || !taken.has(base)) return base;
-  for (let i = 2; i < 1000; i += 1) {
-    const candidate = `${base}-${i}`;
-    if (!taken.has(candidate)) return candidate;
-  }
-  return `${base}-${Date.now()}`;
-}
-
 // Vercel project naming rules: lowercase letters, digits, hyphens and
 // underscores, 1–100 chars, no leading/trailing hyphen. See
 // https://vercel.com/docs/projects/overview#project-name
