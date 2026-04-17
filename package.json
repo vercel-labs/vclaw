@@ -1,6 +1,6 @@
 {
   "name": "@vercel/vclaw",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "CLI to set up and deploy vercel-openclaw with one command",
   "type": "module",
   "files": [

@@ -74,7 +74,7 @@ export async function provisionRedis(projectDir, scope, linked, yes = false) {
     "This may open a browser for Redis Terms of Service on first install. Don't close the terminal."
   );
 
-  const result = await vercelExec(["integration", "add", "redis/redis"], {
+  const result = await vercelExec(["integration", "add", "redis"], {
     cwd: projectDir,
     scope,
     nonInteractive: yes,
@@ -90,7 +90,7 @@ export async function provisionRedis(projectDir, scope, linked, yes = false) {
 
   if (!needsBrowser) {
     throw new Error(
-      `vercel integration add redis/redis exited with code ${result.code}:\n${result.stderr || result.stdout}`
+      `vercel integration add redis exited with code ${result.code}:\n${result.stderr || result.stdout}`
     );
   }
 
