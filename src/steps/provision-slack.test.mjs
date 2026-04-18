@@ -95,6 +95,7 @@ test("provisionSlack: explicit configToken selects create branch, calls POST /ap
     const res = await provisionSlack("https://openclaw.example", "admin", {
       configToken: "xoxe.xoxp-abc",
       refreshToken: "xoxe-1-def",
+      appName: "My Custom Bot",
       pollTimeoutMs: 5_000,
       openBrowser: (url) => openedUrls.push(url),
     });
@@ -116,7 +117,7 @@ test("provisionSlack: explicit configToken selects create branch, calls POST /ap
     const body = JSON.parse(appCall.init.body);
     assert.equal(body.configToken, "xoxe.xoxp-abc");
     assert.equal(body.refreshToken, "xoxe-1-def");
-    assert.ok(!("appName" in body), "appName must not be sent — server derives from env");
+    assert.equal(body.appName, "My Custom Bot");
   } finally {
     stub.restore();
   }

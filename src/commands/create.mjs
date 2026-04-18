@@ -147,6 +147,7 @@ export async function create(argv) {
       "slack-signing-secret": { type: "string" },
       "slack-config-token": { type: "string" },
       "slack-refresh-token": { type: "string" },
+      "slack-app-name": { type: "string" },
       "slack-skip": { type: "boolean", default: false },
       yes: { type: "boolean", short: "y", default: false },
     },
@@ -166,6 +167,7 @@ export async function create(argv) {
     values["slack-bot-token"] !== undefined ||
     values["slack-config-token"] !== undefined ||
     values["slack-refresh-token"] !== undefined ||
+    values["slack-app-name"] !== undefined ||
     values["slack-signing-secret"] !== undefined ||
     values["slack-skip"];
   if (slackRequested && values["skip-deploy"]) {
@@ -177,6 +179,7 @@ export async function create(argv) {
   const slackSigningSecret = values["slack-signing-secret"]?.trim();
   const slackConfigToken = values["slack-config-token"]?.trim();
   const slackRefreshToken = values["slack-refresh-token"]?.trim();
+  const slackAppName = values["slack-app-name"]?.trim();
   if (values["slack-signing-secret"] !== undefined && !slackSigningSecret) {
     throw new Error("--slack-signing-secret value cannot be empty.");
   }
@@ -201,7 +204,7 @@ export async function create(argv) {
       "--slack-config-token creates a new app; --slack-bot-token connects an existing one. Pick one.",
     );
   }
-  if (values["slack-skip"] && (slackConfigToken || slackBotToken || slackRefreshToken)) {
+  if (values["slack-skip"] && (slackConfigToken || slackBotToken || slackRefreshToken || slackAppName)) {
     throw new Error(
       "--slack-skip cannot be combined with other --slack-* flags.",
     );
@@ -500,6 +503,7 @@ export async function create(argv) {
         branch: preselectedBranch,
         configToken: slackConfigToken,
         refreshToken: slackRefreshToken,
+        appName: slackAppName,
         botToken: slackBotToken,
         signingSecret: slackSigningSecret,
         protectionBypassSecret,

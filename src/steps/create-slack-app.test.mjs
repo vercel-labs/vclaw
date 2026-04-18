@@ -24,11 +24,11 @@ function jsonResponse(status, payload) {
   });
 }
 
-test("createSlackApp POSTs to /api/channels/slack/app with bearer auth + config token", async () => {
+test("createSlackApp POSTs to /api/channels/slack/app with bearer auth + config token + optional appName override", async () => {
   const stub = installFetchStub(() =>
     jsonResponse(200, {
       appId: "A123",
-      appName: "my-bot (vercel-labs)",
+      appName: "My Custom Bot",
       installUrl: "https://openclaw.example/api/channels/slack/install?install_token=t",
       installToken: "t",
       oauthAuthorizeUrl: "https://slack.com/oauth/v2/authorize?client_id=...",
@@ -40,7 +40,11 @@ test("createSlackApp POSTs to /api/channels/slack/app with bearer auth + config 
     const res = await createSlackApp(
       "https://openclaw.example/",
       "admin-secret-xyz",
-      { configToken: "xoxe.xoxp-abc", refreshToken: "xoxe-1-def" },
+      {
+        configToken: "xoxe.xoxp-abc",
+        refreshToken: "xoxe-1-def",
+        appName: "My Custom Bot",
+      },
     );
     assert.equal(res.ok, true);
     assert.equal(res.status, 200);
@@ -53,13 +57,14 @@ test("createSlackApp POSTs to /api/channels/slack/app with bearer auth + config 
     assert.deepEqual(JSON.parse(call.init.body), {
       configToken: "xoxe.xoxp-abc",
       refreshToken: "xoxe-1-def",
+      appName: "My Custom Bot",
     });
   } finally {
     stub.restore();
   }
 });
 
-test("createSlackApp omits undefined refresh token from body and never sends appName", async () => {
+test("createSlackApp omits undefined refresh token and appName from body (server derives display name from env)", async () => {
   const stub = installFetchStub(() =>
     jsonResponse(200, { appId: "A1", appName: "X", installUrl: "https://x/y" }),
   );
@@ -68,7 +73,7 @@ test("createSlackApp omits undefined refresh token from body and never sends app
     const body = JSON.parse(stub.calls[0].init.body);
     assert.equal(body.configToken, "xoxe.xoxp-abc");
     assert.ok(!("refreshToken" in body) || body.refreshToken === undefined);
-    assert.ok(!("appName" in body), "appName must not be sent — server derives from env");
+    assert.ok(!("appName" in body) || body.appName === undefined);
   } finally {
     stub.restore();
   }
