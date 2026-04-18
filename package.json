@@ -37,7 +37,9 @@
     "vclaw": "bin/vclaw.mjs"
   },
   "scripts": {
-    "test": "node --test src/*.test.mjs src/**/*.test.mjs"
+    "test": "node --test src/*.test.mjs src/**/*.test.mjs",
+    "preversion": "node scripts/preversion.mjs",
+    "postversion": "git push --follow-tags origin HEAD"
   },
   "publishConfig": {
     "access": "public"

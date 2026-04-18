@@ -1,0 +1,74 @@
+# Publish @vercel/vclaw to npm using npm's Trusted Publishing (OIDC).
+#
+# Setup checklist (one-time, per package):
+#   1. Publish the package at least once via `npm publish` with a classic
+#      token — npm won't show the Trusted Publisher section until v1 exists.
+#   2. On npmjs.com → package → Settings → Trusted Publishers → Add.
+#      - Publisher:       GitHub Actions
+#      - Organization:    vercel-labs
+#      - Repository:      vclaw
+#      - Workflow name:   publish.yml     (filename only, case-sensitive)
+#      - Environment:     (leave blank unless you add one below)
+#   3. Push a tag like `v0.3.9`. This workflow publishes the version in
+#      package.json (verified to match the tag) with short-lived OIDC
+#      credentials + provenance attestation — no NPM_TOKEN required.
+#
+# Trigger:
+#   - Tag push matching `v*` → cuts a release of the version in
+#     package.json (must equal the tag sans `v`).
+#   - Manual `workflow_dispatch` → same, for when you've forgotten the
+#     tag and pushed only a version-bump commit.
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  # `id-token: write` is what makes OIDC work. Without it, the runner
+  # can't mint the token npm uses to verify this workflow is the one
+  # the package owner whitelisted.
+  id-token: write
+  # Read-only checkout; we never push from this workflow.
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Trusted publishing requires Node ≥ 22.14 and npm ≥ 11.5.1.
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Upgrade npm to a trusted-publishing-compatible version
+        # setup-node@v4 bundles an older npm; force-install the latest
+        # so we're guaranteed to have the OIDC codepath.
+        run: npm install -g npm@latest
+
+      - name: Verify tag matches package.json version
+        if: github.event_name == 'push'
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag v$TAG does not match package.json version $PKG. Refusing to publish."
+            exit 1
+          fi
+          echo "Tag and package.json agree on $PKG"
+
+      - name: Run tests
+        run: npm test
+
+      - name: Publish
+        # `--provenance` produces a signed attestation linking this npm
+        # release to this exact workflow run (viewable on npmjs.com under
+        # "Provenance"). Trusted publishing enables it by default, but
+        # passing it explicitly means the publish fails loudly if OIDC
+        # isn't actually configured rather than silently falling back.
+        run: npm publish --provenance --access public
