@@ -4,6 +4,7 @@ import { installFetchShim, mode as tapeMode, scrubTapeFile } from "../src/tape.m
 installFetchShim();
 
 import { add } from "../src/commands/add.mjs";
+import { chat } from "../src/commands/chat.mjs";
 import { create } from "../src/commands/create.mjs";
 import { verify } from "../src/commands/verify.mjs";
 import { doctor } from "../src/commands/doctor.mjs";
@@ -15,6 +16,7 @@ const usage = `
   Usage:
     vclaw create [options]       Clone, provision, and deploy openclaw
     vclaw add <channel>          Attach slack|telegram|discord|whatsapp to a deployed project
+    vclaw chat [options]         Open a terminal chat against a deployed openclaw
     vclaw verify [options]       Run launch verification against a deployment
     vclaw doctor                 Check local prerequisites and project health
     vclaw tape scrub <path>      Redact secrets from a record/replay tape file
@@ -38,6 +40,18 @@ const usage = `
     --destructive            Run destructive verification phases
     --admin-secret <secret>  Admin secret for auth
     --protection-bypass <s>  Deployment protection bypass secret
+
+  Chat options:
+    --dir <path>             Path to linked vercel-openclaw clone (default: cwd)
+    --project <name>         Vercel project name (alternative to --dir)
+    --scope <slug>           Vercel team scope (use with --project)
+    --url <url>              Deployment URL (auto-discovered when omitted)
+    --admin-secret <secret>  Admin secret (auto-pulled from Vercel env / prompted)
+    --protection-bypass <s>  Deployment protection bypass secret
+                             (auto-pulled from Vercel project when omitted)
+    --no-ensure              Skip the sandbox wake step (/api/admin/ensure?wait=1)
+    --no-refresh             Skip the AI Gateway OIDC refresh (/api/admin/refresh-token)
+    --openclaw-spec <spec>   Override npx spec (default: openclaw@latest)
 
   Global options:
     --debug, --verbose       Print detailed logs (also VCLAW_DEBUG=1)
@@ -88,7 +102,7 @@ if (command === "tape") {
   }
 }
 
-const commands = { create, add, verify, doctor };
+const commands = { create, add, chat, verify, doctor };
 const handler = commands[command];
 
 if (!handler) {

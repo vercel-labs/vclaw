@@ -6,6 +6,7 @@
   "files": [
     "bin/vclaw.mjs",
     "src/commands/add.mjs",
+    "src/commands/chat.mjs",
     "src/commands/doctor.mjs",
     "src/commands/create.mjs",
     "src/commands/verify.mjs",
