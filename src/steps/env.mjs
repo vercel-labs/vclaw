@@ -11,24 +11,42 @@ const TARGETS = ["production", "preview"];
 
 /**
  * Push required env vars to the Vercel project.
- * Returns the admin secret (generated or provided).
+ * Returns the admin secret (generated or provided) and a `{[key]: {value, type}}`
+ * map ready for `pushEnvVars`.
+ *
+ * Secrets go in as `sensitive`; per-project identity goes in as `plain` so
+ * operators can read them in the Vercel UI and the server can echo them
+ * back in Slack manifests / admin surfaces.
  */
 export function buildManagedEnvVars({
   adminSecret,
   cronSecret,
   protectionBypassSecret,
+  projectScope,
+  projectName,
 }) {
   const resolvedAdminSecret = adminSecret || randomBytes(32).toString("hex");
   const vars = {
-    ADMIN_SECRET: resolvedAdminSecret,
+    ADMIN_SECRET: { value: resolvedAdminSecret, type: "sensitive" },
   };
 
   if (cronSecret) {
-    vars.CRON_SECRET = cronSecret;
+    vars.CRON_SECRET = { value: cronSecret, type: "sensitive" };
   }
 
   if (protectionBypassSecret) {
-    vars.VERCEL_AUTOMATION_BYPASS_SECRET = protectionBypassSecret;
+    vars.VERCEL_AUTOMATION_BYPASS_SECRET = {
+      value: protectionBypassSecret,
+      type: "sensitive",
+    };
+  }
+
+  if (projectScope) {
+    vars.VCLAW_PROJECT_SCOPE = { value: projectScope, type: "plain" };
+  }
+
+  if (projectName) {
+    vars.VCLAW_PROJECT_NAME = { value: projectName, type: "plain" };
   }
 
   return {
@@ -48,12 +66,11 @@ export async function pushEnvVars(projectDir, vars /* , scope */) {
   }
   const { projectId, teamId } = readLinkedProject(projectDir);
 
-  const entries = Object.entries(vars).map(([key, value]) => ({
-    key,
-    value,
-    target: TARGETS,
-    type: "sensitive",
-  }));
+  const entries = Object.entries(vars).map(([key, entry]) => {
+    const value = typeof entry === "string" ? entry : entry.value;
+    const type = typeof entry === "string" ? "sensitive" : (entry.type ?? "sensitive");
+    return { key, value, target: TARGETS, type };
+  });
 
   await upsertProjectEnv(token, projectId, teamId, entries);
 

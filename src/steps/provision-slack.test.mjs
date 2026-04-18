@@ -70,7 +70,7 @@ test("provisionSlack: explicit configToken selects create branch, calls POST /ap
     if (url.endsWith("/api/channels/slack/app")) {
       return jsonResponse(200, {
         appId: "A1",
-        appName: "VClaw",
+        appName: "my-bot (vercel-labs)",
         installUrl: "https://openclaw.example/api/channels/slack/install?install_token=t",
         installToken: "t",
         oauthAuthorizeUrl: "https://slack.com/oauth/v2/authorize?x=y",
@@ -95,7 +95,6 @@ test("provisionSlack: explicit configToken selects create branch, calls POST /ap
     const res = await provisionSlack("https://openclaw.example", "admin", {
       configToken: "xoxe.xoxp-abc",
       refreshToken: "xoxe-1-def",
-      appName: "VClaw",
       pollTimeoutMs: 5_000,
       openBrowser: (url) => openedUrls.push(url),
     });
@@ -117,7 +116,7 @@ test("provisionSlack: explicit configToken selects create branch, calls POST /ap
     const body = JSON.parse(appCall.init.body);
     assert.equal(body.configToken, "xoxe.xoxp-abc");
     assert.equal(body.refreshToken, "xoxe-1-def");
-    assert.equal(body.appName, "VClaw");
+    assert.ok(!("appName" in body), "appName must not be sent — server derives from env");
   } finally {
     stub.restore();
   }
@@ -129,7 +128,7 @@ test("provisionSlack: create branch returns configured:false when status poll ti
     if (url.endsWith("/api/channels/slack/app")) {
       return jsonResponse(200, {
         appId: "A1",
-        appName: "VClaw",
+        appName: "my-bot (vercel-labs)",
         installUrl: "https://openclaw.example/install-url",
       });
     }

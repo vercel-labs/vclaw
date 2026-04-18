@@ -42,7 +42,6 @@ export async function provisionSlack(
     branch: preselectedBranch,
     configToken: configTokenInput,
     refreshToken: refreshTokenInput,
-    appName: appNameInput,
     botToken,
     signingSecret,
     protectionBypassSecret,
@@ -59,7 +58,6 @@ export async function provisionSlack(
     preselectedBranch,
     hasConfigToken: Boolean(configTokenInput),
     hasRefreshToken: Boolean(refreshTokenInput),
-    appName: appNameInput || null,
     hasBotToken: Boolean(botToken),
     hasSigningSecret: Boolean(signingSecret),
     hasProtectionBypass: Boolean(protectionBypassSecret),
@@ -131,16 +129,9 @@ export async function provisionSlack(
     refreshToken = answer.trim();
   }
 
-  let appName = (appNameInput ?? "").trim();
-  if (!appName && canPrompt) {
-    const answer = await prompt("Slack app display name", "VClaw");
-    appName = answer.trim();
-  }
-
   const created = await createSlackApp(url, adminSecret, {
     configToken,
     refreshToken: refreshToken || undefined,
-    appName: appName || undefined,
     protectionBypassSecret,
   });
 

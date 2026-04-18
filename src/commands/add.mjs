@@ -39,7 +39,6 @@ const usage = `
     --signing-secret <secret>
     --config-token <token>
     --refresh-token <token>
-    --app-name <name>
 
   Telegram / Discord options:
     --bot-token <token>
@@ -85,7 +84,6 @@ export async function add(argv) {
       "signing-secret": { type: "string" },
       "config-token": { type: "string" },
       "refresh-token": { type: "string" },
-      "app-name": { type: "string" },
       // Discord
       "auto-configure-endpoint": { type: "boolean" },
       "auto-register-command": { type: "boolean" },
@@ -147,7 +145,6 @@ async function addSlack(ctx, values) {
     signingSecret: values["signing-secret"] || null,
     configToken: values["config-token"] || null,
     refreshToken: values["refresh-token"] || null,
-    appName: values["app-name"] || null,
     protectionBypassSecret: ctx.protectionBypassSecret || undefined,
   });
 
