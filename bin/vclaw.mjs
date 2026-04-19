@@ -43,7 +43,7 @@ const usage = `
     --protection-bypass <s>  Deployment protection bypass secret
 
   Chat options:
-    --name <claw>            Claw name from registry (see `vclaw create`; picker shown when omitted)
+    --name <claw>            Claw name from registry (see vclaw create; picker shown when omitted)
     --dir <path>             Path to linked vercel-openclaw clone (default: cwd)
     --project <name>         Vercel project name (alternative to --dir)
     --scope <slug>           Vercel team scope (use with --project)
