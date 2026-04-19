@@ -29,6 +29,7 @@ import {
   setActiveTeam,
 } from "../vercel-api.mjs";
 import { isInteractive, log, prompt, promptMasked, step, success, warn } from "../ui.mjs";
+import { registerClaw, suggestClawName, validateClawName } from "../registry.mjs";
 
 const DEFAULT_NAME = "vercel-openclaw";
 const DEFAULT_DIR = "./vercel-openclaw";
@@ -133,6 +134,7 @@ export async function create(argv) {
     args: argv,
     options: {
       name: { type: "string" },
+      "claw-name": { type: "string" },
       scope: { type: "string" },
       team: { type: "string" },
       dir: { type: "string" },
@@ -351,6 +353,41 @@ export async function create(argv) {
 
   // 6. Link to Vercel
   const linked = await linkProject(projectDir, name, scope);
+
+  // 6a. Name your claw — register a friendly alias in ~/.vclaw/registry.json
+  //     so the user can run `vclaw chat --name <claw>` from any directory.
+  {
+    const suggested = suggestClawName(name);
+    let clawName = values["claw-name"];
+    if (clawName) {
+      const err = validateClawName(clawName);
+      if (err) throw new Error(`--claw-name "${clawName}" is invalid: ${err}`);
+    } else if (canPrompt) {
+      step("Name your claw");
+      log("  Pick a short name so you can chat from anywhere:");
+      log(`  ${`vclaw chat --name ${suggested}`}`);
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const answer = await prompt("Claw name?", suggested);
+        const err = validateClawName(answer);
+        if (!err) {
+          clawName = answer;
+          break;
+        }
+        warn(err);
+      }
+      if (!clawName) clawName = suggested;
+    } else {
+      clawName = suggested;
+    }
+    registerClaw(clawName, {
+      projectId: linked.projectId,
+      teamId: linked.teamId || undefined,
+      projectDir,
+      vercelProjectName: name,
+      scope: scope || undefined,
+    });
+    success(`Registered as "${clawName}" \u2014 use \`vclaw chat --name ${clawName}\` from anywhere`);
+  }
 
   // 7. Provision Redis via Vercel Marketplace
   await provisionRedis(projectDir, scope, linked, values.yes);

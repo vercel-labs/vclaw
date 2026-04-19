@@ -1,13 +1,17 @@
 import { parseArgs } from "node:util";
 import { spawn as nodeSpawn } from "node:child_process";
 import { tmpdir } from "node:os";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { resolveDeploymentContext } from "../steps/resolve-deployment-context.mjs";
-import { log, step, success, dim, spinner } from "../ui.mjs";
+import { getClaw, listClaws } from "../registry.mjs";
+import { isInteractive, log, prompt, step, success, dim, spinner, warn } from "../ui.mjs";
 
 export async function chat(argv) {
   const { values } = parseArgs({
     args: argv,
     options: {
+      name: { type: "string" },
       dir: { type: "string" },
       project: { type: "string" },
       scope: { type: "string" },
@@ -20,7 +24,70 @@ export async function chat(argv) {
     },
   });
 
-  log("vclaw chat — attaching to deployed openclaw\n");
+  log("vclaw chat \u2014 attaching to deployed openclaw\n");
+
+  // Resolve claw from --name or interactive picker
+  let registryProjectId;
+  let registryTeamId;
+  let resolvedName = values.name;
+
+  if (resolvedName) {
+    const entry = getClaw(resolvedName);
+    if (!entry) {
+      throw new Error(
+        `No claw named "${resolvedName}" found. Run \`vclaw chat\` without --name to see available claws.`,
+      );
+    }
+    registryProjectId = entry.projectId;
+    registryTeamId = entry.teamId;
+    success(`Using claw "${resolvedName}"`);
+  } else if (
+    !values.dir &&
+    !values.project &&
+    !values.url &&
+    !existsSync(join(resolve(process.cwd()), ".vercel", "project.json"))
+  ) {
+    const claws = listClaws();
+    if (claws.length === 0) {
+      throw new Error(
+        "No claws registered and no linked project found.\n" +
+          "Run \`vclaw create\` first, or pass --url / --project / --dir.",
+      );
+    }
+    if (claws.length === 1) {
+      resolvedName = claws[0].name;
+      registryProjectId = claws[0].projectId;
+      registryTeamId = claws[0].teamId;
+      success(`Using claw "${resolvedName}" (only one registered)`);
+    } else if (isInteractive()) {
+      log("");
+      claws.forEach((c, i) => {
+        const scope = c.scope ? ` (${c.scope})` : "";
+        log(`  ${i + 1}) ${c.name}${dim(scope)}`);
+      });
+      log("");
+      const answer = await prompt(
+        `Which claw? [1-${claws.length}]`,
+        "1",
+      );
+      const idx = Number.parseInt(answer, 10);
+      const picked =
+        Number.isFinite(idx) && idx >= 1 && idx <= claws.length
+          ? claws[idx - 1]
+          : (warn(`Invalid selection "${answer}" \u2014 using ${claws[0].name}.`),
+            claws[0]);
+      resolvedName = picked.name;
+      registryProjectId = picked.projectId;
+      registryTeamId = picked.teamId;
+      success(`Using claw "${resolvedName}"`);
+    } else {
+      throw new Error(
+        "Multiple claws registered but running non-interactively.\n" +
+          "Pass --name <claw> to select one. Available: " +
+          claws.map((c) => c.name).join(", "),
+      );
+    }
+  }
 
   step("Resolving deployment");
   const ctx = await resolveDeploymentContext({
@@ -30,6 +97,8 @@ export async function chat(argv) {
     scope: values.scope,
     adminSecret: values["admin-secret"],
     protectionBypassSecret: values["protection-bypass"],
+    projectId: registryProjectId,
+    teamId: registryTeamId,
   });
   const appUrl = ctx.url;
   const adminSecret = ctx.adminSecret;

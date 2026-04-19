@@ -28,6 +28,7 @@
     "src/steps/resolve-deployment-context.mjs",
     "src/steps/run-verify.mjs",
     "src/steps/redis.mjs",
+    "src/registry.mjs",
     "src/ui.mjs",
     "src/vercel-api.mjs",
     "src/vercel.mjs",

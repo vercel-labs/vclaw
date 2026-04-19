@@ -33,6 +33,8 @@ export async function resolveDeploymentContext({
   scope: scopeFlag,
   adminSecret: adminSecretFlag,
   protectionBypassSecret: bypassFlag,
+  projectId: projectIdParam,
+  teamId: teamIdParam,
 } = {}) {
   const projectDir = resolve(dir);
   const linkedPath = join(projectDir, ".vercel", "project.json");
@@ -46,11 +48,13 @@ export async function resolveDeploymentContext({
     scopeFlag: scopeFlag ?? null,
     hasAdminSecretFlag: Boolean(adminSecretFlag),
     hasBypassFlag: Boolean(bypassFlag),
+    projectIdParam: projectIdParam ?? null,
+    teamIdParam: teamIdParam ?? null,
   });
 
-  let projectId = null;
-  let teamId;
-  if (hasLinkedProject) {
+  let projectId = projectIdParam || null;
+  let teamId = teamIdParam;
+  if (!projectId && hasLinkedProject) {
     const linked = readLinkedProject(projectDir);
     projectId = linked.projectId;
     teamId = linked.teamId;

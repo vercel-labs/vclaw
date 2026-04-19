@@ -23,6 +23,7 @@ const usage = `
 
   Create options:
     --name <name>            Vercel project name (prompted; default: vercel-openclaw)
+    --claw-name <name>       Friendly alias for this claw (prompted; e.g. "builder_bot")
     --scope <scope>          Vercel team scope
     --team <slug>            Deprecated alias for --scope
     --dir <path>             Clone destination (prompted; default: ./vercel-openclaw)
@@ -42,6 +43,7 @@ const usage = `
     --protection-bypass <s>  Deployment protection bypass secret
 
   Chat options:
+    --name <claw>            Claw name from registry (see `vclaw create`; picker shown when omitted)
     --dir <path>             Path to linked vercel-openclaw clone (default: cwd)
     --project <name>         Vercel project name (alternative to --dir)
     --scope <slug>           Vercel team scope (use with --project)
