@@ -66,11 +66,35 @@ export async function connectWhatsApp(
   const body = parseJson(raw);
 
   if (res.ok) {
+    const reasons = [];
+    if (body?.lastError) {
+      reasons.push(`whatsapp reported error: ${body.lastError}`);
+    }
+    if (body?.connected === false) {
+      reasons.push("whatsapp not connected (server reports connected=false)");
+    }
+    if (body?.webhookVerified === false) {
+      reasons.push("whatsapp webhook not verified");
+    }
+
+    if (reasons.length > 0) {
+      const label = pickDisplayName(body);
+      spin.fail(
+        label
+          ? `WhatsApp auth ok (${label}) but channel is not serviceable`
+          : "WhatsApp auth ok but channel is not serviceable",
+      );
+      for (const r of reasons) warn(`  ${r}`);
+      return {
+        ok: false,
+        status: res.status,
+        body,
+        reason: "channel-setup-incomplete",
+      };
+    }
+
     const label = pickDisplayName(body);
     spin.succeed(label ? `WhatsApp connected (${label})` : "WhatsApp connected");
-    if (body?.lastError) {
-      warn(`WhatsApp reported a non-fatal error: ${body.lastError}`);
-    }
     return { ok: true, status: res.status, body };
   }
 

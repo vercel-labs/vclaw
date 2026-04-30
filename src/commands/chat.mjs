@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolveDeploymentContext } from "../steps/resolve-deployment-context.mjs";
-import { getClaw, listClaws } from "../registry.mjs";
+import { getClaw, getClawByProjectId, listClaws } from "../registry.mjs";
+import { readLinkedProject } from "../steps/env.mjs";
 import { isInteractive, log, prompt, step, success, dim, spinner, warn } from "../ui.mjs";
 
 export async function chat(argv) {
@@ -29,6 +30,7 @@ export async function chat(argv) {
   // Resolve claw from --name or interactive picker
   let registryProjectId;
   let registryTeamId;
+  let registryVerifiedUrl;
   let resolvedName = values.name;
 
   if (resolvedName) {
@@ -40,6 +42,7 @@ export async function chat(argv) {
     }
     registryProjectId = entry.projectId;
     registryTeamId = entry.teamId;
+    registryVerifiedUrl = entry.verifiedUrl;
     success(`Using claw "${resolvedName}"`);
   } else if (
     !values.dir &&
@@ -58,6 +61,7 @@ export async function chat(argv) {
       resolvedName = claws[0].name;
       registryProjectId = claws[0].projectId;
       registryTeamId = claws[0].teamId;
+      registryVerifiedUrl = claws[0].verifiedUrl;
       success(`Using claw "${resolvedName}" (only one registered)`);
     } else if (isInteractive()) {
       log("");
@@ -79,6 +83,7 @@ export async function chat(argv) {
       resolvedName = picked.name;
       registryProjectId = picked.projectId;
       registryTeamId = picked.teamId;
+      registryVerifiedUrl = picked.verifiedUrl;
       success(`Using claw "${resolvedName}"`);
     } else {
       throw new Error(
@@ -86,6 +91,35 @@ export async function chat(argv) {
           "Pass --name <claw> to select one. Available: " +
           claws.map((c) => c.name).join(", "),
       );
+    }
+  }
+
+  // Fallback: when running from a linked project directory (or --dir) and
+  // no --name was given, the registry lookup above is skipped. Read the
+  // linked project's .vercel/project.json and reverse-look-up by projectId
+  // so vclaw chat from inside ~/dev/vercel-openclaw still uses the
+  // verifiedUrl persisted on `vclaw create`.
+  if (!registryVerifiedUrl && !values.url) {
+    const dir = resolve(values.dir || process.cwd());
+    if (existsSync(join(dir, ".vercel", "project.json"))) {
+      try {
+        const linked = readLinkedProject(dir);
+        const match = getClawByProjectId(linked.projectId, linked.teamId);
+        if (match) {
+          registryProjectId = registryProjectId || match.projectId;
+          registryTeamId = registryTeamId || match.teamId;
+          registryVerifiedUrl = match.verifiedUrl;
+          if (!resolvedName) resolvedName = match.name;
+          if (match.verifiedUrl) {
+            success(
+              `Matched linked project to claw "${match.name}" ${dim("(registry verifiedUrl)")}`,
+            );
+          }
+        }
+      } catch {
+        // Linked project unreadable — fall through to the normal resolution
+        // path; resolveDeploymentContext will surface a clearer error.
+      }
     }
   }
 
@@ -99,6 +133,7 @@ export async function chat(argv) {
     protectionBypassSecret: values["protection-bypass"],
     projectId: registryProjectId,
     teamId: registryTeamId,
+    verifiedUrl: registryVerifiedUrl,
   });
   const appUrl = ctx.url;
   const adminSecret = ctx.adminSecret;

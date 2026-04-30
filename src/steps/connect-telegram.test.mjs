@@ -75,6 +75,46 @@ test("connectTelegram forwards the protection bypass header when provided", asyn
   }
 });
 
+test("connectTelegram fails when webhookConfigured is false even on 200", async () => {
+  const stub = installFetchStub(() =>
+    jsonResponse(200, {
+      botUsername: "oc_test_bot",
+      webhookConfigured: false,
+    }),
+  );
+  try {
+    const res = await connectTelegram(
+      "https://x",
+      "admin",
+      "token",
+    );
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, "channel-setup-incomplete");
+  } finally {
+    stub.restore();
+  }
+});
+
+test("connectTelegram fails when getWebhookInfo reports last_error_message", async () => {
+  const stub = installFetchStub(() =>
+    jsonResponse(200, {
+      botUsername: "oc_test_bot",
+      webhookConfigured: true,
+      webhookInfo: {
+        url: "https://x/api/channels/telegram/webhook",
+        last_error_message: "Wrong response from the webhook: 401 Unauthorized",
+      },
+    }),
+  );
+  try {
+    const res = await connectTelegram("https://x", "admin", "token");
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, "channel-setup-incomplete");
+  } finally {
+    stub.restore();
+  }
+});
+
 test("connectTelegram surfaces CHANNEL_CONNECT_BLOCKED as a structured failure", async () => {
   const stub = installFetchStub(() =>
     jsonResponse(409, {

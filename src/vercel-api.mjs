@@ -257,6 +257,30 @@ export async function getProjectEnvValue(token, projectId, teamId, envId) {
   return body;
 }
 
+/**
+ * Read a single deployment's status via Vercel's REST API. Accepts either a
+ * deployment id (`dpl_...`) or a deployment URL (without the scheme), per
+ * https://vercel.com/docs/rest-api/endpoints/deployments#get-a-deployment-by-id-or-url
+ *
+ * The body includes `readyState` ("READY" / "BUILDING" / "INITIALIZING" /
+ * "ERROR" / "QUEUED" / "CANCELED") and the `aliasAssigned` epoch ms field —
+ * both used by `waitForDeploymentReady` to avoid running verify against a
+ * still-building or stale deployment.
+ */
+export async function getDeployment(token, idOrUrl, teamId) {
+  const cleaned = String(idOrUrl).replace(/^https?:\/\//, "");
+  const { ok, body, status } = await api(
+    token,
+    `/v13/deployments/${encodeURIComponent(cleaned)}${teamQuery(teamId)}`
+  );
+  if (!ok) {
+    throw new Error(
+      `GET /v13/deployments/${cleaned} failed (${status}): ${stringify(body)}`
+    );
+  }
+  return body;
+}
+
 export async function listProjectEnvs(token, projectId, teamId) {
   const qs = new URLSearchParams();
   if (teamId) qs.set("teamId", teamId);

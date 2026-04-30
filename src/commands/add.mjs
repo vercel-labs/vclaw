@@ -142,7 +142,10 @@ async function addSlack(ctx, values) {
 
   const result = await provisionSlack(ctx.url, ctx.adminSecret, {
     canPrompt: isInteractive(),
-    preselectedBranch: branch || null,
+    // provisionSlack's option key is `branch`, not `preselectedBranch`.
+    // Passing the wrong key meant `--branch create` with no config token
+    // silently fell through to "skip" and reported success.
+    branch: branch || null,
     botToken: values["bot-token"] || null,
     signingSecret: values["signing-secret"] || null,
     configToken: values["config-token"] || null,
@@ -154,6 +157,17 @@ async function addSlack(ctx, values) {
   if (result.ok === false) {
     throw new Error(
       `Slack provisioning failed${result.branch ? ` (branch: ${result.branch})` : ""}.`,
+    );
+  }
+  // The user explicitly invoked `vclaw add slack`, so a "skip" outcome
+  // (provisionSlack falls through to skip when canPrompt:false and no creds
+  // were provided) is a failure, not a silent success — same shape as the
+  // R4 fix in `vclaw create`.
+  if (result.branch === "skip" && branch !== "skip") {
+    throw new Error(
+      "Slack was not configured: no usable credentials. " +
+        "Pass --config-token (create flow) or --bot-token + --signing-secret " +
+        "(connect flow), or run interactively to be prompted.",
     );
   }
   if (result.configured === false && result.branch === "create") {

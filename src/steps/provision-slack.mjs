@@ -47,6 +47,11 @@ export async function provisionSlack(
     signingSecret,
     protectionBypassSecret,
     pollTimeoutMs = 180_000,
+    pollIntervalMs,
+    // Shorter window than the OAuth poll because connect just needs the
+    // server-side auth.test result to become consistent on /api/channels/summary
+    // — no browser hop, so a few seconds is plenty in practice.
+    connectReadyTimeoutMs = 30_000,
     openBrowser = defaultOpenBrowser,
   } = {},
 ) {
@@ -96,6 +101,11 @@ export async function provisionSlack(
         botToken: b,
         signingSecret: s,
         protectionBypassSecret,
+        // Poll /api/channels/summary so we don't trust a single 2xx PUT —
+        // the server's auth.test result is what determines whether Slack
+        // is actually serviceable.
+        waitForReady: true,
+        readyPollTimeoutMs: connectReadyTimeoutMs,
       });
       return { branch: "connect", ok: res.ok, configured: res.ok };
     }
@@ -103,6 +113,8 @@ export async function provisionSlack(
       botToken: bot,
       signingSecret: sig,
       protectionBypassSecret,
+      waitForReady: true,
+      readyPollTimeoutMs: connectReadyTimeoutMs,
     });
     return { branch: "connect", ok: res.ok, configured: res.ok };
   }
@@ -126,7 +138,7 @@ export async function provisionSlack(
     log(dim("  (using refresh token from ~/.config/vclaw/slack.json)"));
   } else if (!refreshToken && canPrompt) {
     const answer = await promptMasked(
-      "Slack App Refresh Token (optional, press Enter to skip)",
+      "Slack App Configuration Token Refresh Token (optional, enables auto-rotation)",
     );
     refreshToken = answer.trim();
   }
@@ -193,6 +205,7 @@ export async function provisionSlack(
   const configured = await waitForSlackConfigured(url, adminSecret, {
     protectionBypassSecret,
     timeoutMs: pollTimeoutMs,
+    pollIntervalMs,
     installTokenPrefix,
     mintedAt,
   });
@@ -279,6 +292,13 @@ export async function waitForSlackConfigured(
   const spin = spinner("Waiting for Slack OAuth to complete in your browser");
   const start = Date.now();
   let attempt = 0;
+  // Require TWO consecutive `configured && connected` polls before declaring
+  // success — same shape as connect-slack.mjs. Either bit can flicker during
+  // OAuth+cache convergence on Vercel; a single positive sample has produced
+  // false-success runs that ship deployments which then 401 every Slack
+  // message at runtime.
+  let stableHits = 0;
+  const REQUIRED_STABLE_HITS = 2;
   try {
     while (Date.now() - start < timeoutMs) {
       attempt += 1;
@@ -286,14 +306,26 @@ export async function waitForSlackConfigured(
       debug("waitForSlackConfigured.poll", {
         attempt,
         elapsedMs: Date.now() - start,
+        stableHits,
         ...poll,
       });
-      if (poll.configured === true) {
-        spin.succeed("Slack connected");
-        return true;
+      if (poll.configured === true && poll.connected === true) {
+        stableHits += 1;
+        if (stableHits >= REQUIRED_STABLE_HITS) {
+          spin.succeed("Slack connected");
+          return true;
+        }
+      } else {
+        stableHits = 0;
       }
       const elapsed = Math.round((Date.now() - start) / 1000);
-      spin.update(`Waiting for Slack OAuth — ${elapsed}s`);
+      const stage =
+        poll.configured === true && poll.connected !== true
+          ? "verifying Slack auth"
+          : poll.configured === true && stableHits > 0
+            ? "confirming Slack readiness"
+            : "waiting for Slack OAuth";
+      spin.update(`${stage[0].toUpperCase()}${stage.slice(1)} — ${elapsed}s`);
       await new Promise((r) => setTimeout(r, pollIntervalMs));
     }
     spin.fail("Slack did not finish connecting in time");

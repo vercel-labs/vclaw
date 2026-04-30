@@ -1,5 +1,6 @@
 import { spinner, warn, log, dim } from "../ui.mjs";
 import { buildAuthHeaders } from "./run-verify.mjs";
+import { isReplay } from "../tape.mjs";
 
 /**
  * Register a Slack app against the deployed vercel-openclaw admin API.
@@ -14,11 +15,27 @@ import { buildAuthHeaders } from "./run-verify.mjs";
  * credentials in place so the app can verify incoming requests.
  *
  * Returns `{ ok, status, body }`. Never throws on HTTP errors.
+ *
+ * When `waitForReady: true`, after a 2xx PUT the helper polls
+ * `/api/channels/summary` until Slack reports `configured && connected` for
+ * two consecutive polls (server-side `auth.test` succeeded), and returns
+ * `{ ok: false, reason: "channel-setup-incomplete" }` if the poll times out.
+ * Default `false` keeps backward compatibility with existing call sites.
  */
 export async function connectSlack(
   url,
   adminSecret,
-  { botToken, signingSecret, protectionBypassSecret } = {},
+  {
+    botToken,
+    signingSecret,
+    protectionBypassSecret,
+    waitForReady = false,
+    readyPollTimeoutMs = 30_000,
+    readyPollIntervalMs,
+    fetchImpl = fetch,
+    now = () => Date.now(),
+    sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  } = {},
 ) {
   if (!url) throw new Error("connectSlack: deployment url is required");
   if (!adminSecret) throw new Error("connectSlack: adminSecret is required");
@@ -50,6 +67,36 @@ export async function connectSlack(
   const body = parseJson(raw);
 
   if (res.ok) {
+    if (waitForReady) {
+      const ready = await waitForSlackReady({
+        url: base,
+        headers,
+        timeoutMs: readyPollTimeoutMs,
+        intervalMs: readyPollIntervalMs ?? (isReplay() ? 0 : 2_000),
+        fetchImpl,
+        now,
+        sleep,
+      });
+      if (!ready.ok) {
+        const label = describeSuccess(body);
+        spin.fail(
+          label
+            ? `Slack auth ok (${label}) but server is not yet ready`
+            : "Slack auth ok but server is not yet ready",
+        );
+        warn(
+          `  Slack ${ready.reason} — \`/api/channels/summary\` did not report configured && connected within ${Math.round(readyPollTimeoutMs / 1000)}s.`,
+        );
+        return {
+          ok: false,
+          status: res.status,
+          body,
+          reason: "channel-setup-incomplete",
+          summary: ready.lastSummary,
+        };
+      }
+    }
+
     const label = describeSuccess(body);
     spin.succeed(label ? `Slack connected (${label})` : "Slack connected");
     return { ok: true, status: res.status, body };
@@ -77,6 +124,65 @@ export async function connectSlack(
     log(dim("(empty response body)"));
   }
   return { ok: false, status: res.status, body };
+}
+
+/**
+ * Poll /api/channels/summary until Slack reports `configured && connected`
+ * for two consecutive polls. The two-consecutive requirement guards against
+ * a transient `connected: true` flicker during token rotation or summary
+ * cache convergence — Oracle's audit specifically called out the single-
+ * sample race in the create branch.
+ */
+async function waitForSlackReady({
+  url,
+  headers,
+  timeoutMs,
+  intervalMs,
+  fetchImpl,
+  now,
+  sleep,
+}) {
+  const endpoint = `${url}/api/channels/summary`;
+  const deadline = now() + timeoutMs;
+  let consecutive = 0;
+  let lastSummary = null;
+  let lastReason = "summary-poll-timeout";
+  while (now() < deadline) {
+    try {
+      const res = await fetchImpl(endpoint, {
+        headers,
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (res.ok) {
+        const ct = res.headers.get("content-type") || "";
+        if (ct.includes("application/json")) {
+          const body = await res.json().catch(() => null);
+          const slack = body?.slack;
+          lastSummary = slack ?? null;
+          if (slack?.configured === true && slack?.connected === true) {
+            consecutive += 1;
+            if (consecutive >= 2) return { ok: true };
+          } else {
+            consecutive = 0;
+            if (slack?.configured === false) lastReason = "not-configured";
+            else if (slack?.connected === false) lastReason = "not-connected";
+            else lastReason = "missing-slack-fields";
+          }
+        } else {
+          lastReason = "non-json-summary";
+          consecutive = 0;
+        }
+      } else {
+        lastReason = `summary-status-${res.status}`;
+        consecutive = 0;
+      }
+    } catch (err) {
+      lastReason = `summary-fetch-${err?.message ?? "error"}`;
+      consecutive = 0;
+    }
+    await sleep(intervalMs);
+  }
+  return { ok: false, reason: lastReason, lastSummary };
 }
 
 function describeSuccess(body) {

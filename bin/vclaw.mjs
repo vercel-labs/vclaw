@@ -33,6 +33,9 @@ const usage = `
                               Optional Vercel deployment protection mode
     --protection-bypass-secret <secret>
                               Optional automation bypass secret (generated when protection is enabled)
+    --bundle-url <url>       Use pre-built esbuild bundle instead of npm install
+    --skip-clone             Use --dir as-is without cloning or pulling
+    --skip-redis             Skip Redis provisioning (use existing)
     --skip-deploy            Stop after provisioning, don't deploy
     --yes                    Skip confirmation prompts
 

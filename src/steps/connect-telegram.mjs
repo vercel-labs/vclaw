@@ -49,12 +49,39 @@ export async function connectTelegram(
   const body = parseJson(raw);
 
   if (res.ok) {
+    const reasons = [];
+    if (body?.webhookConfigured === false) {
+      reasons.push("telegram setWebhook did not succeed");
+    }
+    const lastErrorMessage = body?.webhookInfo?.last_error_message;
+    if (typeof lastErrorMessage === "string" && lastErrorMessage.length > 0) {
+      reasons.push(`telegram getWebhookInfo reports last_error_message: ${lastErrorMessage}`);
+    }
+
+    if (reasons.length > 0) {
+      const username = pickUsername(body);
+      spin.fail(
+        username
+          ? `Telegram auth ok (@${username}) but webhook is not serviceable`
+          : "Telegram auth ok but webhook is not serviceable",
+      );
+      for (const r of reasons) warn(`  ${r}`);
+      return {
+        ok: false,
+        status: res.status,
+        body,
+        reason: "channel-setup-incomplete",
+      };
+    }
+
     const username = pickUsername(body);
     spin.succeed(
       username ? `Telegram connected as @${username}` : "Telegram connected",
     );
     const commandSync = body?.commandSyncStatus;
     if (commandSync === "error" && body?.commandSyncError) {
+      // Slash command sync is best-effort and not on the message-delivery
+      // path — keep this as a warn, not a hard failure.
       warn(`Slash command sync failed: ${body.commandSyncError}`);
     }
     return { ok: true, status: res.status, body };
