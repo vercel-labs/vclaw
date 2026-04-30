@@ -65,21 +65,46 @@ export async function connectDiscord(
   const body = parseJson(raw);
 
   if (res.ok) {
+    const endpointRequested = autoConfigureEndpoint !== false;
+    const commandRequested = autoRegisterCommand !== false;
+    const reasons = [];
+    if (endpointRequested && body?.endpointConfigured !== true) {
+      reasons.push(
+        body?.endpointError
+          ? `interactions endpoint not configured: ${body.endpointError}`
+          : "interactions endpoint not configured",
+      );
+    }
+    if (commandRequested && body?.commandRegistered !== true) {
+      reasons.push("slash command /ask not registered");
+    }
+
+    if (reasons.length > 0) {
+      const username = pickUsername(body);
+      spin.fail(
+        username
+          ? `Discord auth ok (${username}) but setup incomplete`
+          : "Discord auth ok but setup incomplete",
+      );
+      for (const r of reasons) warn(`  ${r}`);
+      log(
+        dim(
+          "  Re-run with --discord-bot-token plus --auto-configure-endpoint / --auto-register-command, " +
+            "or set both up manually in the Discord developer portal and re-run with --discord-bot-token.",
+        ),
+      );
+      return {
+        ok: false,
+        status: res.status,
+        body,
+        reason: "channel-setup-incomplete",
+      };
+    }
+
     const username = pickUsername(body);
     spin.succeed(
       username ? `Discord connected as ${username}` : "Discord connected",
     );
-    if (body?.endpointConfigured === false && body?.endpointError) {
-      warn(`Interactions endpoint not auto-configured: ${body.endpointError}`);
-      log(
-        dim(
-          "  Set it manually in the Discord developer portal under General Information → Interactions Endpoint URL.",
-        ),
-      );
-    }
-    if (body?.commandRegistered === false) {
-      warn("Slash command /ask was not registered — set it up manually if desired.");
-    }
     return { ok: true, status: res.status, body };
   }
 

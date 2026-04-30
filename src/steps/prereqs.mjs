@@ -2,7 +2,7 @@ import { exec } from "../shell.mjs";
 import { getUser, readVercelToken } from "../vercel-api.mjs";
 import { step, success, fail, warn } from "../ui.mjs";
 
-export async function checkPrereqs() {
+export async function checkPrereqs({ requireVercelAuth = false } = {}) {
   const checks = [
     {
       name: "git",
@@ -52,9 +52,13 @@ export async function checkPrereqs() {
       success(`authenticated as ${who}`);
       return;
     } catch (err) {
-      warn(
-        `Vercel token found but /v2/user rejected it: ${err.message}. Run \`vercel login\` or set a fresh VERCEL_TOKEN.`
-      );
+      const message =
+        `Vercel token found but /v2/user rejected it: ${err.message}. ` +
+        "Run `vercel login` or set a fresh VERCEL_TOKEN.";
+      if (requireVercelAuth) {
+        throw new Error(message);
+      }
+      warn(message);
       return;
     }
   }
@@ -63,8 +67,10 @@ export async function checkPrereqs() {
   if (whoami.code === 0 && whoami.stdout.trim()) {
     success(`authenticated as ${whoami.stdout.trim()}`);
   } else {
-    warn(
-      "Not authenticated yet. `vclaw create` will rely on `vercel login` or VERCEL_TOKEN when it needs access."
-    );
+    const message = "Not authenticated yet. Run `vercel login` or set VERCEL_TOKEN.";
+    if (requireVercelAuth) {
+      throw new Error(message);
+    }
+    warn(message);
   }
 }

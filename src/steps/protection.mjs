@@ -65,14 +65,16 @@ export async function configureProjectProtection(linked, plan, promptForPassword
   }
 
   let protectionBypassSecret;
+  let bypassFreshlyCreated = false;
   if (plan.enableBypass) {
-    const { secret } = await ensureAutomationBypassSecret(
+    const { secret, created } = await ensureAutomationBypassSecret(
       token,
       linked.projectId,
       linked.teamId,
       { note: "vclaw create" }
     );
     protectionBypassSecret = secret;
+    bypassFreshlyCreated = Boolean(created);
   }
 
   const summary = [];
@@ -82,5 +84,16 @@ export async function configureProjectProtection(linked, plan, promptForPassword
     `Project protection configured${summary.length ? ` (${summary.join(", ")})` : ""}`
   );
 
-  return { protectionBypassSecret };
+  // protectionFreshlyApplied tells runVerify whether the project's protection
+  // and/or bypass was just changed in this same run. When true, the edge may
+  // not yet honor the bypass header even though the project API has already
+  // acknowledged it — runVerify should retry 401/403 within a bounded window
+  // instead of fail-fast on the first auth rejection.
+  const protectionFreshlyApplied = plan.mode !== "none" || bypassFreshlyCreated;
+
+  return {
+    protectionBypassSecret,
+    bypassFreshlyCreated,
+    protectionFreshlyApplied,
+  };
 }

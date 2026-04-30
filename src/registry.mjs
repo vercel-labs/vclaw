@@ -48,6 +48,26 @@ export function getClaw(name) {
   return reg[name] || null;
 }
 
+/**
+ * Reverse lookup: find a registry entry whose projectId matches. Used by
+ * `vclaw chat` when running from a linked project directory so the
+ * end-to-end-verified URL still wins over a fresh getProductionAlias() call.
+ * Returns `{ name, ...entry }` or null.
+ */
+export function getClawByProjectId(projectId, teamId) {
+  if (!projectId) return null;
+  const reg = readRegistry();
+  for (const [name, entry] of Object.entries(reg)) {
+    if (entry?.projectId !== projectId) continue;
+    // teamId is optional in the registry (personal projects have undefined),
+    // so a registry entry with no teamId matches any team query and vice
+    // versa. Only fail when both sides are set and disagree.
+    if (entry.teamId && teamId && entry.teamId !== teamId) continue;
+    return { name, ...entry };
+  }
+  return null;
+}
+
 const CLAW_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,62}[a-z0-9]$|^[a-z0-9]$/;
 
 export function validateClawName(name) {

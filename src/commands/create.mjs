@@ -7,7 +7,11 @@ import { cloneRepo } from "../steps/clone.mjs";
 import { linkProject } from "../steps/link.mjs";
 import { provisionRedis } from "../steps/redis.mjs";
 import { buildManagedEnvVars, pushEnvVars, readLinkedProject } from "../steps/env.mjs";
-import { deploy } from "../steps/deploy.mjs";
+import {
+  deploy,
+  pickVerifyTargetForDeployment,
+  waitForDeploymentReady,
+} from "../steps/deploy.mjs";
 import { runVerify } from "../steps/run-verify.mjs";
 import { connectTelegram } from "../steps/connect-telegram.mjs";
 import { provisionSlack } from "../steps/provision-slack.mjs";
@@ -19,6 +23,7 @@ import { validateProjectName } from "../vercel.mjs";
 import {
   ensureAutomationBypassSecret,
   findAvailableProjectName,
+  getDeployment,
   getProductionAlias,
   getProject,
   getTeamBySlug,
@@ -28,11 +33,77 @@ import {
   readVercelToken,
   setActiveTeam,
 } from "../vercel-api.mjs";
+import { isReplay } from "../tape.mjs";
 import { isInteractive, log, prompt, promptMasked, step, success, warn } from "../ui.mjs";
 import { registerClaw, suggestClawName, validateClawName } from "../registry.mjs";
 
 const DEFAULT_NAME = "vercel-openclaw";
 const DEFAULT_DIR = "./vercel-openclaw";
+
+export function shouldInvokeSlackProvisioning({
+  preselectedBranch,
+  slackRequested,
+}) {
+  return preselectedBranch !== null || slackRequested;
+}
+
+/**
+ * Pure decision function for what to do with the result of provisionSlack.
+ * Returns one of:
+ *   { kind: "ok" }                           — no further action
+ *   { kind: "warn", message }                — warn-and-continue (interactive only)
+ *   { kind: "throw", code, message }         — fatal
+ *
+ * `code` is a stable closed union for tests:
+ *   "explicit-skip"      — slackExplicit && branch === "skip"
+ *   "explicit-not-ok"    — slackExplicit && branch !== "skip" && !ok
+ *   "explicit-not-configured" — slackExplicit && create-branch ok:true / configured:false
+ */
+export function evaluateSlackProvisioningOutcome({ slackExplicit, result }) {
+  if (slackExplicit && result.branch === "skip") {
+    return {
+      kind: "throw",
+      code: "explicit-skip",
+      message:
+        "Slack was requested explicitly (via --slack-* flag) but no usable credentials were provided. " +
+        "Re-run with --slack-config-token (create flow) or --slack-bot-token + --slack-signing-secret " +
+        "(connect flow), drop --yes to be prompted, or pass --slack-skip to opt out.",
+    };
+  }
+  if (result.branch !== "skip" && !result.ok) {
+    if (slackExplicit) {
+      return {
+        kind: "throw",
+        code: "explicit-not-ok",
+        message:
+          "Slack was requested explicitly (via --slack-* flag) but could not be connected. " +
+          "Re-run with valid --slack-* values, or omit the flag to skip Slack setup.",
+      };
+    }
+    return {
+      kind: "warn",
+      message:
+        "Slack was not fully connected. The deployment is otherwise healthy — " +
+        "retry from the admin panel or re-run vclaw create with valid --slack-* values.",
+    };
+  }
+  if (
+    slackExplicit &&
+    result.branch !== "skip" &&
+    result.ok &&
+    result.configured === false
+  ) {
+    return {
+      kind: "throw",
+      code: "explicit-not-configured",
+      message:
+        "Slack OAuth did not finish in time. The Slack app was created but the install was not " +
+        "confirmed. Re-run vclaw create after completing the install in your browser, or finish " +
+        "from the admin panel.",
+    };
+  }
+  return { kind: "ok" };
+}
 
 async function resolveScope(canPrompt) {
   step("Checking Vercel team scopes");
@@ -151,6 +222,9 @@ export async function create(argv) {
       "slack-refresh-token": { type: "string" },
       "slack-app-name": { type: "string" },
       "slack-skip": { type: "boolean", default: false },
+      "bundle-url": { type: "string" },
+      "skip-clone": { type: "boolean", default: false },
+      "skip-redis": { type: "boolean", default: false },
       yes: { type: "boolean", short: "y", default: false },
     },
   });
@@ -229,7 +303,7 @@ export async function create(argv) {
   log("vclaw create — setting up vercel-openclaw\n");
 
   // 1. Check local prereqs
-  await checkPrereqs();
+  await checkPrereqs({ requireVercelAuth: true });
 
   const canPrompt = isInteractive() && !values.yes;
 
@@ -348,17 +422,27 @@ export async function create(argv) {
     }
   }
 
-  // 5. Clone
-  const projectDir = await cloneRepo(dir);
+  // 5. Clone (or use existing dir as-is with --skip-clone)
+  let projectDir;
+  if (values["skip-clone"]) {
+    projectDir = resolve(dir);
+    log(`Using local checkout at ${projectDir} (--skip-clone)`);
+  } else {
+    projectDir = await cloneRepo(dir);
+  }
 
   // 6. Link to Vercel
   const linked = await linkProject(projectDir, name, scope);
 
-  // 6a. Name your claw — register a friendly alias in ~/.vclaw/registry.json
-  //     so the user can run `vclaw chat --name <claw>` from any directory.
+  // 6a. Name your claw. The registry write is DEFERRED until after verify
+  //     succeeds (step 12) — writing it here would leave a half-created
+  //     project (deploy failed, verify failed, baked placeholders) still
+  //     resolvable via `vclaw chat --name <claw>`, sending the user to a
+  //     broken URL.
+  let clawName;
   {
     const suggested = suggestClawName(name);
-    let clawName = values["claw-name"];
+    clawName = values["claw-name"];
     if (clawName) {
       const err = validateClawName(clawName);
       if (err) throw new Error(`--claw-name "${clawName}" is invalid: ${err}`);
@@ -379,24 +463,20 @@ export async function create(argv) {
     } else {
       clawName = suggested;
     }
-    registerClaw(clawName, {
-      projectId: linked.projectId,
-      teamId: linked.teamId || undefined,
-      projectDir,
-      vercelProjectName: name,
-      scope: scope || undefined,
-    });
-    success(`Registered as "${clawName}" \u2014 use \`vclaw chat --name ${clawName}\` from anywhere`);
   }
 
   // 7. Provision Redis via Vercel Marketplace
-  await provisionRedis(projectDir, scope, linked, values.yes);
+  if (values["skip-redis"]) {
+    warn("Skipping Redis provisioning (--skip-redis)");
+  } else {
+    await provisionRedis(projectDir, scope, linked, values.yes);
+  }
 
   // 8. Configure project protection when requested
-  let { protectionBypassSecret } = await configureProjectProtection(
-    linked,
-    protectionPlan
-  );
+  let {
+    protectionBypassSecret,
+    protectionFreshlyApplied,
+  } = await configureProjectProtection(linked, protectionPlan);
 
   // 8a. Auto-detect pre-existing protection on the project (most common when
   // reusing an existing project) and ensure we have an automation bypass
@@ -421,6 +501,7 @@ export async function create(argv) {
             { note: "vclaw create auto-detected protection" }
           );
           protectionBypassSecret = secret;
+          if (created) protectionFreshlyApplied = true;
           success(
             created
               ? "Automation bypass secret created"
@@ -468,8 +549,9 @@ export async function create(argv) {
     protectionBypassSecret,
     projectScope: activeSlug || scope || null,
     projectName: name,
+    bundleUrl: values["bundle-url"],
   });
-  await pushEnvVars(projectDir, vars, scope);
+  await pushEnvVars(projectDir, vars);
 
   if (values["skip-deploy"]) {
     warn("Skipping deploy (--skip-deploy). Run `vclaw verify` after deploying.");
@@ -484,26 +566,101 @@ export async function create(argv) {
   // which makes /api/admin/preflight return HTML 401 from the edge. The
   // canonical production alias (<project>.vercel.app or a custom domain)
   // skips that gate. Prefer it when available.
+  //
+  // CLI stdout proves a deployment was *triggered*, not that it has finished
+  // building or that aliases have moved to it. Wait on the deployment's
+  // readyState so verify doesn't probe the previous deployment via the still-
+  // unmoved production alias.
+
+  // 11a. Wait for the deployment to actually reach READY. This MUST run
+  // outside any catch — a terminal ERROR/CANCELED or a 5-minute timeout
+  // means we cannot meaningfully verify, so abort instead of degrading
+  // into "verify against the unverified URL anyway."
+  const token = readVercelToken();
   let verifyUrl = deployUrl;
-  try {
-    const token = readVercelToken();
-    if (token) {
-      const { projectId, teamId } = readLinkedProject(projectDir);
-      const alias = await getProductionAlias(token, projectId, teamId);
-      if (alias) verifyUrl = alias;
-      else warn(
-        `No production alias found — verifying against the unique deployment URL. ` +
-          `If the project has Standard Protection enabled, verify may return 401.`
+  let verifyTargetSource = "cli-deploy-url";
+  if (token) {
+    const { projectId, teamId } = readLinkedProject(projectDir);
+
+    const readyResult = await waitForDeploymentReady({
+      read: () => getDeployment(token, deployUrl, teamId),
+      intervalMs: isReplay() ? 0 : 3_000,
+      timeoutMs: isReplay() ? 1_000 : 5 * 60_000,
+    });
+
+    if (!readyResult.ready) {
+      const status = readyResult.readyState || "timeout";
+      const detail = readyResult.terminal
+        ? `Vercel reported readyState=${status} for ${deployUrl} — the build did not succeed. Check \`vercel logs ${deployUrl}\` for the error.`
+        : `Deployment ${deployUrl} did not reach READY within 5 minutes (last readyState=${status}).`;
+      throw new Error(detail);
+    }
+
+    // 11b. Correlate alias to the just-deployed deployment. Failures here
+    // (network blip, project lookup error) are recoverable — we can still
+    // verify against the unique deployment URL, just with a louder warning
+    // when there is no bypass secret to defeat Standard Protection.
+    try {
+      const project = await getProject(token, projectId, teamId);
+      const projectAliases = Array.isArray(project?.targets?.production?.alias)
+        ? project.targets.production.alias.filter((a) => typeof a === "string")
+        : [];
+
+      const rawPreferred = await getProductionAlias(token, projectId, teamId);
+      // getProductionAlias returns "https://<host>"; pickVerifyTarget compares
+      // by bare hostname against deployment.alias[].
+      const preferredHost = rawPreferred
+        ? rawPreferred.replace(/^https?:\/\//, "")
+        : undefined;
+
+      const target = pickVerifyTargetForDeployment({
+        deployment: readyResult.deployment,
+        projectAliases,
+        preferredAlias: preferredHost,
+      });
+
+      if (target.url) {
+        verifyUrl = target.url.startsWith("http")
+          ? target.url
+          : `https://${target.url}`;
+        verifyTargetSource = target.source;
+      }
+    } catch (err) {
+      warn(`Could not resolve production alias for verify: ${err.message}`);
+    }
+  }
+
+  // 11c. Surface the unique-URL fallback. The unique deployment URL is
+  // SSO-gated by Standard Protection by default, so verifying against it
+  // without a bypass secret will return 401 from the edge before runVerify
+  // ever reaches the admin route. Warn loudly so the failure is interpreted
+  // correctly when it happens.
+  if (
+    verifyTargetSource === "deployment-url" ||
+    verifyTargetSource === "cli-deploy-url"
+  ) {
+    if (!protectionBypassSecret) {
+      warn(
+        `Verifying against the unique deployment URL (${verifyUrl}) — no production alias is wired up yet. ` +
+          `Standard Protection will return 401 unless an automation bypass secret is set; either add a custom domain or pass --protection-bypass-secret.`
+      );
+    } else {
+      warn(
+        `Verifying against the unique deployment URL (${verifyUrl}) using the bypass secret — no production alias is wired up yet.`
       );
     }
-  } catch (err) {
-    warn(`Could not resolve production alias: ${err.message}`);
   }
 
   // 12. Verify
-  await runVerify(verifyUrl, adminSecret, { protectionBypassSecret });
+  await runVerify(verifyUrl, adminSecret, {
+    protectionBypassSecret,
+    protectionFreshlyApplied,
+  });
 
-  // 13. Optionally wire Telegram bot
+  // 13. Optionally wire Telegram bot. When the user passed --telegram
+  // explicitly, treat connector failure as fatal — the same shape as the
+  // launch-verify failure: silently warn-and-continue would leave a
+  // misconfigured bot in production while the CLI prints "Done!".
   let telegramConnected = false;
   if (values.telegram) {
     const res = await connectTelegram(
@@ -514,14 +671,20 @@ export async function create(argv) {
     );
     telegramConnected = res.ok;
     if (!res.ok) {
-      warn(
-        "Telegram bot was not connected. The deployment is otherwise healthy — " +
-          "retry from the admin panel or re-run with a valid --telegram value.",
+      throw new Error(
+        `--telegram was passed but Telegram could not be connected (${res.reason ?? `status ${res.status}`}). ` +
+          "Re-run with a valid --telegram value, or omit --telegram to skip Telegram setup.",
       );
     }
   }
 
-  // 14. Optionally wire Slack app — three-branch flow (create / connect / skip)
+  // 14. Optionally wire Slack app — three-branch flow (create / connect / skip).
+  // When the user explicitly opted in via --slack-config-token,
+  // --slack-bot-token / --slack-signing-secret, or the catch-all
+  // slackRequested flag, treat both ok:false and configured:false as fatal.
+  // Interactive prompts (canPrompt with no preselection) keep the warn-and-
+  // continue behavior because the user can still finish setup from the
+  // admin panel.
   let slackConnected = false;
   let slackBranch = "skip";
   if (!values["slack-skip"]) {
@@ -530,10 +693,15 @@ export async function create(argv) {
       : slackBotToken && slackSigningSecret
         ? "connect"
         : null;
-    const shouldInvoke =
-      preselectedBranch !== null ||
-      values.slack ||
-      canPrompt;
+    const shouldInvoke = shouldInvokeSlackProvisioning({
+      preselectedBranch,
+      slackRequested,
+    });
+    const slackExplicit =
+      Boolean(slackRequested) ||
+      Boolean(preselectedBranch) ||
+      Boolean(slackConfigToken) ||
+      (Boolean(slackBotToken) && Boolean(slackSigningSecret));
     if (shouldInvoke) {
       const result = await provisionSlack(verifyUrl, adminSecret, {
         canPrompt,
@@ -547,14 +715,50 @@ export async function create(argv) {
       });
       slackBranch = result.branch;
       slackConnected = Boolean(result.configured);
-      if (result.branch !== "skip" && !result.ok) {
-        warn(
-          "Slack was not fully connected. The deployment is otherwise healthy — " +
-            "retry from the admin panel or re-run vclaw create with valid --slack-* values.",
-        );
-      }
+      const decision = evaluateSlackProvisioningOutcome({
+        slackExplicit,
+        result,
+      });
+      if (decision.kind === "throw") throw new Error(decision.message);
+      if (decision.kind === "warn") warn(decision.message);
     }
   }
+
+  // 15. Now that deployment + verify + every requested channel succeeded,
+  //     write the friendly-name registry entry. Doing this AFTER channel
+  //     setup means a failed `--telegram` or `--slack-*` aborts the run
+  //     without leaving a registered-but-broken claw that future
+  //     `vclaw chat --name` calls would happily attach to.
+  registerClaw(clawName, {
+    projectId: linked.projectId,
+    teamId: linked.teamId || undefined,
+    projectDir,
+    vercelProjectName: name,
+    scope: scope || undefined,
+    verifiedUrl: verifyUrl,
+    verifiedAt: new Date().toISOString(),
+    channels: {
+      telegram: telegramConnected
+        ? { status: "connected" }
+        : values.telegram
+          ? { status: "requested" }
+          : { status: "skipped" },
+      slack: {
+        status:
+          slackConnected && slackBranch === "create"
+            ? "connected"
+            : slackConnected && slackBranch === "connect"
+              ? "connected"
+              : slackBranch === "skip"
+                ? "skipped"
+                : "incomplete",
+        branch: slackBranch,
+      },
+    },
+  });
+  success(
+    `Registered as "${clawName}" — use \`vclaw chat --name ${clawName}\` from anywhere`,
+  );
 
   success(`\nDone! Your OpenClaw instance is live at ${verifyUrl}\n`);
   log("Next steps:");

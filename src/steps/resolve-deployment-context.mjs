@@ -35,6 +35,12 @@ export async function resolveDeploymentContext({
   protectionBypassSecret: bypassFlag,
   projectId: projectIdParam,
   teamId: teamIdParam,
+  // URL persisted by `vclaw create` after launch-verify succeeded. Preferred
+  // over getProductionAlias() because (a) it's the exact URL we already
+  // verified end-to-end on the create run, and (b) it's available offline
+  // without an extra Vercel API hop. Falls back to getProductionAlias() when
+  // missing (older registry entries) or when --url overrides it.
+  verifiedUrl: verifiedUrlParam,
 } = {}) {
   const projectDir = resolve(dir);
   const linkedPath = join(projectDir, ".vercel", "project.json");
@@ -86,8 +92,16 @@ export async function resolveDeploymentContext({
     projectId = project.id;
   }
 
-  // Resolve URL
+  // Resolve URL. Precedence: --url flag → registry verifiedUrl → live
+  // getProductionAlias(). The registry value is what we verified end-to-end
+  // on `vclaw create` and survives later production-alias re-resolution edge
+  // cases (e.g. multiple aliases attached to the project).
   let url = urlFlag || null;
+  let urlSource = urlFlag ? "flag" : null;
+  if (!url && verifiedUrlParam) {
+    url = verifiedUrlParam;
+    urlSource = "registry";
+  }
   if (!url && projectId) {
     const token = readVercelToken();
     if (!token) {
@@ -96,6 +110,7 @@ export async function resolveDeploymentContext({
       );
     }
     url = await getProductionAlias(token, projectId, teamId);
+    urlSource = "production-alias";
     if (!url) {
       throw new Error(
         `Project ${projectId} has no production alias yet — deploy it first, or pass --url.`,
@@ -193,6 +208,7 @@ export async function resolveDeploymentContext({
 
   debug("resolveDeploymentContext.result", {
     url,
+    urlSource,
     projectId,
     teamId: teamId ?? null,
     hasAdminSecret: Boolean(adminSecret),
@@ -201,6 +217,7 @@ export async function resolveDeploymentContext({
 
   return {
     url,
+    urlSource,
     adminSecret,
     protectionBypassSecret,
     projectId,

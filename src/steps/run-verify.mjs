@@ -16,10 +16,32 @@ export function buildAuthHeaders(adminSecret, protectionBypassSecret) {
   return headers;
 }
 
+export class VerifyFailedError extends Error {
+  constructor(message, result) {
+    super(message);
+    this.name = "VerifyFailedError";
+    this.result = result;
+  }
+}
+
 export async function runVerify(
   url,
   adminSecret,
-  { destructive = false, protectionBypassSecret } = {}
+  {
+    destructive = false,
+    protectionBypassSecret,
+    // When true, deployment protection and/or its automation-bypass secret was
+    // just configured in this same run. The Vercel project API can ack the
+    // change before the edge actually honors the bypass header, so 401/403
+    // responses during the initial wait window are a propagation artifact —
+    // not a permanent misconfiguration. Retry within a bounded grace period.
+    protectionFreshlyApplied = false,
+    // When true, runVerify resolves with a result object even when preflight
+    // or launch-verify fails. Default behavior throws so callers cannot
+    // accidentally print "complete" after a failed verification (the previous
+    // contract returned `{ ok: false, ... }` and most callers ignored it).
+    allowFailure = false,
+  } = {}
 ) {
   const base = url.replace(/\/+$/, "");
   const authHeaders = buildAuthHeaders(adminSecret, protectionBypassSecret);
@@ -28,6 +50,8 @@ export async function runVerify(
   const readySpin = spinner("Waiting for deployment to be reachable");
   try {
     await pollUntilReady(`${base}/api/admin/preflight`, authHeaders, {
+      retryAuthFailuresUntilMs:
+        protectionFreshlyApplied && protectionBypassSecret ? 120_000 : 0,
       onTick: (elapsedSec) =>
         readySpin.update(`Waiting for deployment (${elapsedSec}s)`),
     });
@@ -69,6 +93,12 @@ export async function runVerify(
         warn(`  ${action.id}: ${action.message}`);
       }
     }
+    if (!allowFailure) {
+      throw new VerifyFailedError(
+        "Preflight reported issues. Re-run after addressing the failures above, or pass allowFailure to inspect the result programmatically.",
+        { stage: "preflight", preflight }
+      );
+    }
   }
 
   // 3. Launch verification (safe mode by default)
@@ -88,7 +118,9 @@ export async function runVerify(
         ...authHeaders,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ destructive }),
+      // The route reads `body.mode`; sending `{ destructive: true }` was
+      // silently ignored, so wakeFromSleep / restorePrepared phases never ran.
+      body: JSON.stringify({ mode: destructive ? "destructive" : "safe" }),
     });
   } catch (err) {
     verifySpin.fail("Launch verification failed");
@@ -115,7 +147,14 @@ export async function runVerify(
     if (hint) warn(hint);
     if (raw) log(dim(truncate(raw, 800)));
     else log(dim("(empty response body)"));
-    return { ok: false, status: verifyRes.status, body: raw, hint };
+    const failure = { ok: false, status: verifyRes.status, body: raw, hint };
+    if (!allowFailure) {
+      throw new VerifyFailedError(
+        `Launch verification returned HTTP ${verifyRes.status}.`,
+        failure
+      );
+    }
+    return failure;
   }
 
   if (result === null) {
@@ -124,16 +163,29 @@ export async function runVerify(
     );
     if (raw) log(dim(truncate(raw, 800)));
     else log(dim("(empty response body)"));
-    return { ok: false, status: verifyRes.status, body: raw };
+    const failure = { ok: false, status: verifyRes.status, body: raw };
+    if (!allowFailure) {
+      throw new VerifyFailedError(
+        "Launch verification returned a non-JSON response.",
+        failure
+      );
+    }
+    return failure;
   }
 
   if (result.ok) {
     verifySpin.succeed("Launch verification passed");
-  } else {
-    verifySpin.fail("Launch verification returned issues");
-    log(dim(JSON.stringify(result, null, 2)));
+    return result;
   }
 
+  verifySpin.fail("Launch verification returned issues");
+  log(dim(JSON.stringify(result, null, 2)));
+  if (!allowFailure) {
+    throw new VerifyFailedError(
+      "Launch verification reported {ok:false}. See output above for details.",
+      result
+    );
+  }
   return result;
 }
 
@@ -170,28 +222,46 @@ function describeVerifyFailure(status, raw, parsed) {
   return null;
 }
 
-async function pollUntilReady(url, headers, { timeoutMs = 300_000, onTick } = {}) {
-  const start = Date.now();
-  const pollIntervalMs = isReplay() ? 0 : 3_000;
+export async function pollUntilReady(
+  url,
+  headers,
+  {
+    timeoutMs = 300_000,
+    retryAuthFailuresUntilMs = 0,
+    onTick,
+    fetchImpl = fetch,
+    now = () => Date.now(),
+    sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+    pollIntervalMs,
+  } = {}
+) {
+  const start = now();
+  const interval = pollIntervalMs ?? (isReplay() ? 0 : 3_000);
   let lastStatus = null;
-  while (Date.now() - start < timeoutMs) {
+  while (now() - start < timeoutMs) {
     try {
-      const res = await fetch(url, {
+      const res = await fetchImpl(url, {
         headers,
         signal: AbortSignal.timeout(10_000),
       });
       if (res.ok) return;
       lastStatus = res.status;
-      // 401/403 with an admin bearer means the admin secret is wrong or
-      // deployment protection is blocking us. Retrying won't help.
       if (res.status === 401 || res.status === 403) {
-        throw new Error(
-          `Deployment returned ${res.status} on /api/admin/preflight. ` +
-            `Check that the admin secret matches ADMIN_SECRET on the deployment` +
-            (res.status === 403
-              ? `, and that deployment protection bypass is configured if protection is enabled.`
-              : `.`)
-        );
+        // 401/403 normally signals a permanent misconfiguration (wrong admin
+        // secret, missing bypass) and we fail fast. But when caller signals
+        // protection was JUST applied, the bypass header may not yet be
+        // honored at the edge — keep polling within the grace window.
+        const elapsed = now() - start;
+        if (elapsed >= retryAuthFailuresUntilMs) {
+          throw new Error(
+            `Deployment returned ${res.status} on /api/admin/preflight. ` +
+              `Check that the admin secret matches ADMIN_SECRET on the deployment` +
+              (res.status === 403
+                ? `, and that deployment protection bypass is configured if protection is enabled.`
+                : `.`)
+          );
+        }
+        // fall through and continue polling
       }
     } catch (err) {
       if (err && err.message && err.message.startsWith("Deployment returned")) {
@@ -199,8 +269,8 @@ async function pollUntilReady(url, headers, { timeoutMs = 300_000, onTick } = {}
       }
       // network / timeout — keep polling
     }
-    if (onTick) onTick(Math.round((Date.now() - start) / 1000));
-    await new Promise((r) => setTimeout(r, pollIntervalMs));
+    if (onTick) onTick(Math.round((now() - start) / 1000));
+    await sleep(interval);
   }
   const suffix = lastStatus ? ` (last status: ${lastStatus})` : "";
   throw new Error(

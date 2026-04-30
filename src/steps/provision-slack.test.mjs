@@ -39,25 +39,71 @@ test("provisionSlack: skip branch short-circuits without any network calls", asy
   }
 });
 
-test("provisionSlack: connect branch routes to PUT /api/channels/slack", async () => {
-  const stub = installFetchStub(() =>
-    jsonResponse(200, { team: "T", user: "u", botId: "B1" }),
-  );
+test("provisionSlack: connect branch routes to PUT /api/channels/slack and polls summary", async () => {
+  const stub = installFetchStub((url) => {
+    if (url.endsWith("/api/channels/slack")) {
+      return jsonResponse(200, { team: "T", user: "u", botId: "B1" });
+    }
+    if (url.endsWith("/api/channels/summary")) {
+      // connectSlack now polls summary after a successful PUT and requires
+      // two consecutive configured && connected reads.
+      return jsonResponse(200, {
+        slack: { configured: true, connected: true },
+      });
+    }
+    return jsonResponse(404, {});
+  });
   try {
     const res = await provisionSlack("https://openclaw.example", "admin", {
       branch: "connect",
       botToken: "xoxb-abc",
       signingSecret: "sig",
+      connectReadyTimeoutMs: 5_000,
     });
     assert.equal(res.branch, "connect");
     assert.equal(res.ok, true);
     assert.equal(res.configured, true);
-    assert.equal(stub.calls.length, 1);
-    assert.equal(
-      stub.calls[0].url,
-      "https://openclaw.example/api/channels/slack",
+    const putCall = stub.calls.find((c) =>
+      c.url.endsWith("/api/channels/slack"),
     );
-    assert.equal(stub.calls[0].init.method, "PUT");
+    assert.ok(putCall, "expected PUT /api/channels/slack");
+    assert.equal(putCall.init.method, "PUT");
+    const summaryCalls = stub.calls.filter((c) =>
+      c.url.endsWith("/api/channels/summary"),
+    );
+    assert.ok(
+      summaryCalls.length >= 2,
+      `expected at least two summary polls for stable readiness, got ${summaryCalls.length}`,
+    );
+  } finally {
+    stub.restore();
+  }
+});
+
+test("provisionSlack: connect branch fails when summary never reports connected===true", async () => {
+  const stub = installFetchStub((url) => {
+    if (url.endsWith("/api/channels/slack")) {
+      return jsonResponse(200, { team: "T", user: "u", botId: "B1" });
+    }
+    if (url.endsWith("/api/channels/summary")) {
+      return jsonResponse(200, {
+        slack: { configured: true, connected: false },
+      });
+    }
+    return jsonResponse(404, {});
+  });
+  try {
+    const res = await provisionSlack("https://openclaw.example", "admin", {
+      branch: "connect",
+      botToken: "xoxb-abc",
+      signingSecret: "sig",
+      connectReadyTimeoutMs: 50, // tight bound so the test finishes fast
+    });
+    // Server-side auth.test never passed, so connect should fail even
+    // though the PUT succeeded.
+    assert.equal(res.branch, "connect");
+    assert.equal(res.ok, false);
+    assert.equal(res.configured, false);
   } finally {
     stub.restore();
   }
@@ -97,6 +143,11 @@ test("provisionSlack: explicit configToken selects create branch, calls POST /ap
       refreshToken: "xoxe-1-def",
       appName: "My Custom Bot",
       pollTimeoutMs: 5_000,
+      // The create-branch readiness gate now requires TWO consecutive
+      // configured && connected reads (same as connect-branch). Use a tight
+      // interval so all three polls (1× negative, 2× positive) fit within
+      // the 5s budget.
+      pollIntervalMs: 50,
       openBrowser: (url) => openedUrls.push(url),
     });
     assert.equal(res.branch, "create");
@@ -118,6 +169,47 @@ test("provisionSlack: explicit configToken selects create branch, calls POST /ap
     assert.equal(body.configToken, "xoxe.xoxp-abc");
     assert.equal(body.refreshToken, "xoxe-1-def");
     assert.equal(body.appName, "My Custom Bot");
+  } finally {
+    stub.restore();
+  }
+});
+
+test("provisionSlack: configured===true alone does NOT report success — connected must also be true", async () => {
+  const openedUrls = [];
+  let statusCalls = 0;
+  const stub = installFetchStub((url) => {
+    if (url.endsWith("/api/channels/slack/app")) {
+      return jsonResponse(200, {
+        appId: "A1",
+        appName: "my-bot",
+        installUrl: "https://openclaw.example/install-url",
+      });
+    }
+    if (url.endsWith("/api/channels/summary")) {
+      statusCalls += 1;
+      // OAuth callback finished writing the redis token (configured=true)
+      // but Slack auth.test against the bot token has not succeeded yet.
+      // The poll must keep waiting until connected flips true; if the poll
+      // window expires first, the result reports configured=false.
+      return jsonResponse(200, {
+        slack: { configured: true, connected: false },
+      });
+    }
+    return jsonResponse(404, {});
+  });
+  try {
+    const res = await provisionSlack("https://openclaw.example", "admin", {
+      configToken: "xoxe.xoxp-abc",
+      pollTimeoutMs: 50,
+      openBrowser: (url) => openedUrls.push(url),
+    });
+    assert.equal(res.branch, "create");
+    assert.equal(
+      res.configured,
+      false,
+      "summary reporting configured-but-not-connected must not be treated as ready"
+    );
+    assert.ok(statusCalls > 0, "expected the summary poll to actually run");
   } finally {
     stub.restore();
   }
