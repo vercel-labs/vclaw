@@ -1,6 +1,47 @@
 import { exec } from "../shell.mjs";
-import { getUser, readVercelToken } from "../vercel-api.mjs";
+import { getUser, readVercelTokenWithSource } from "../vercel-api.mjs";
 import { step, success, fail, warn } from "../ui.mjs";
+
+export function formatVercelAuthError({ source, path, detail } = {}) {
+  const summary = summarizeVercelAuthDetail(detail);
+  if (source === "env") {
+    return (
+      "VERCEL_TOKEN is set, but Vercel rejected it.\n" +
+      "Unset VERCEL_TOKEN or replace it with a valid token, then retry.\n" +
+      "You can also run `vercel login` and rerun without VERCEL_TOKEN.\n" +
+      (summary ? `\nVercel response: ${summary}` : "")
+    );
+  }
+  if (source === "cli") {
+    return (
+      "Your Vercel CLI login has expired or is invalid.\n" +
+      (path ? `\nAuth file:\n  ${path}` : "") +
+      (summary ? `\nVercel response: ${summary}` : "") +
+      "\n\nRun `vercel login`, then rerun `vclaw create`."
+    );
+  }
+  return "You are not logged in to Vercel. Run `vercel login`, then rerun `vclaw create`.";
+}
+
+function summarizeVercelAuthDetail(detail) {
+  if (!detail) return "";
+  const status = String(detail).match(/failed \((\d+)\)/)?.[1];
+  const jsonStart = String(detail).indexOf("{");
+  if (jsonStart >= 0) {
+    try {
+      const body = JSON.parse(String(detail).slice(jsonStart));
+      const code = body?.error?.code;
+      const message = body?.error?.message;
+      const invalidToken = body?.error?.invalidToken ? " invalidToken" : "";
+      return [status && `${status}`, code, message, invalidToken.trim()]
+        .filter(Boolean)
+        .join(" - ");
+    } catch {
+      // fall through to raw detail
+    }
+  }
+  return String(detail);
+}
 
 export async function checkPrereqs({ requireVercelAuth = false } = {}) {
   const checks = [
@@ -44,7 +85,7 @@ export async function checkPrereqs({ requireVercelAuth = false } = {}) {
   }
 
   step("Checking Vercel authentication");
-  const token = readVercelToken();
+  const { token, source, path } = readVercelTokenWithSource();
   if (token) {
     try {
       const user = await getUser(token);
@@ -52,9 +93,11 @@ export async function checkPrereqs({ requireVercelAuth = false } = {}) {
       success(`authenticated as ${who}`);
       return;
     } catch (err) {
-      const message =
-        `Vercel token found but /v2/user rejected it: ${err.message}. ` +
-        "Run `vercel login` or set a fresh VERCEL_TOKEN.";
+      const message = formatVercelAuthError({
+        source,
+        path,
+        detail: err.message,
+      });
       if (requireVercelAuth) {
         throw new Error(message);
       }
@@ -67,7 +110,7 @@ export async function checkPrereqs({ requireVercelAuth = false } = {}) {
   if (whoami.code === 0 && whoami.stdout.trim()) {
     success(`authenticated as ${whoami.stdout.trim()}`);
   } else {
-    const message = "Not authenticated yet. Run `vercel login` or set VERCEL_TOKEN.";
+    const message = formatVercelAuthError({ source: "none" });
     if (requireVercelAuth) {
       throw new Error(message);
     }

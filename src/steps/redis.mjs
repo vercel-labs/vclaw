@@ -21,6 +21,7 @@ export function hasRedisEnvVars(envPayload) {
 const REDIS_URL_PATTERN = /^rediss?:\/\//i;
 const PROVISIONING_PLACEHOLDER_PATTERN = /provision|progress|pending/i;
 const INTEGRATION_STORE_SECRET_SETTLE_MS = 60_000;
+export const REDIS_RESOURCE_TIMEOUT_MS = 15 * 60_000;
 
 function isIntegrationStoreSecret(entry) {
   return entry?.contentHint?.type === "integration-store-secret";
@@ -152,7 +153,7 @@ export async function listRedisResources({ cwd } = {}) {
 
 export async function waitForRedisResource({
   read,
-  timeoutMs = 5 * 60_000,
+  timeoutMs = REDIS_RESOURCE_TIMEOUT_MS,
   intervalMs = 3000,
   now = () => Date.now(),
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -250,28 +251,38 @@ export async function provisionRedis(projectDir, scope, linked, yes = false) {
   // have answered "n", or the marketplace checkout may still be completing
   // in the browser. Poll `vercel integration list` until status="available".
   const spin = spinner("Verifying Redis resource is available");
+  const redisPollStartedAt = Date.now();
   const resource = await waitForRedisResource({
     read: () => listRedisResources({ cwd: projectDir }),
     onTick: (attempt, observed) => {
+      const elapsed = Math.round((Date.now() - redisPollStartedAt) / 1000);
       if (!observed) {
+        spin.update(`Verifying Redis resource is available — ${elapsed}s`);
         debug(`redis poll attempt ${attempt}: no resource attached yet`);
         return;
       }
       if (observed.error) {
+        spin.update(`Verifying Redis resource is available — ${elapsed}s`);
         debug(`redis poll attempt ${attempt}: list error: ${observed.error}`);
         return;
       }
+      spin.update(
+        `Verifying Redis resource is available — ${elapsed}s · ${observed.status ?? "unknown"}`,
+      );
       debug(
         `redis poll attempt ${attempt}: ${observed.name ?? observed.id ?? "?"} status=${observed.status ?? "?"}`
       );
     },
+    timeoutMs: isReplay() ? 1_000 : REDIS_RESOURCE_TIMEOUT_MS,
     intervalMs: isReplay() ? 0 : 3000,
   });
 
   if (!resource) {
-    spin.fail("Redis resource never became available");
+    spin.fail(
+      `Redis resource did not become available within ${formatDuration(REDIS_RESOURCE_TIMEOUT_MS)}`,
+    );
     throw new Error(
-      "Redis was not linked to this project. " +
+      "Redis was not linked to this project, or it is still provisioning in Vercel Marketplace. " +
         "Confirm the resource install in the browser, answer the CLI prompt with Y, then rerun `vclaw create`."
     );
   }
@@ -289,4 +300,13 @@ export async function provisionRedis(projectDir, scope, linked, yes = false) {
   }
 
   spin.succeed(`Redis provisioned (${resource.name ?? resource.id ?? "unnamed"})`);
+}
+
+function formatDuration(ms) {
+  const seconds = Math.round(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (minutes === 0) return `${remainder}s`;
+  if (remainder === 0) return `${minutes}m`;
+  return `${minutes}m ${remainder}s`;
 }

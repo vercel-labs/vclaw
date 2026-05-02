@@ -60,16 +60,23 @@ export function setActiveTeam(teamId) {
 }
 
 export function readVercelToken() {
-  if (process.env.VERCEL_TOKEN) return process.env.VERCEL_TOKEN;
+  return readVercelTokenWithSource().token;
+}
+
+export function readVercelTokenWithSource() {
+  if (process.env.VERCEL_TOKEN) {
+    return { token: process.env.VERCEL_TOKEN, source: "env", path: null };
+  }
   for (const dir of vercelCliDirs()) {
     try {
-      const raw = JSON.parse(readFileSync(join(dir, "auth.json"), "utf8"));
-      if (raw?.token) return raw.token;
+      const path = join(dir, "auth.json");
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      if (raw?.token) return { token: raw.token, source: "cli", path };
     } catch {
       // try next
     }
   }
-  return null;
+  return { token: null, source: "none", path: null };
 }
 
 async function api(token, path, init = {}) {

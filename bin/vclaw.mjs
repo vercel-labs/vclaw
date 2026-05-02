@@ -14,7 +14,7 @@ const usage = `
   vclaw - set up and deploy vercel-openclaw with one command
 
   Usage:
-    vclaw create [options]       Clone, provision, and deploy openclaw
+    vclaw create [options]       Provision and deploy OpenClaw to Vercel
     vclaw add <channel>          Attach slack|telegram|discord|whatsapp to a deployed project
     vclaw chat [options]         Open a terminal chat against a deployed openclaw
     vclaw verify [options]       Run launch verification against a deployment
@@ -26,15 +26,17 @@ const usage = `
     --claw-name <name>       Friendly alias for this claw (prompted; e.g. "builder_bot")
     --scope <scope>          Vercel team scope
     --team <slug>            Deprecated alias for --scope
-    --dir <path>             Clone destination (prompted; default: ./vercel-openclaw)
+    --dir <path>             Use an existing local vercel-openclaw project directory
     --admin-secret <secret>  Admin dashboard password (prompted masked + confirmed when omitted interactively; required non-interactively)
     --cron-secret <hex>      Optional dedicated cron secret
     --deployment-protection <none|sso|password>
                               Optional Vercel deployment protection mode
     --protection-bypass-secret <secret>
                               Optional automation bypass secret (generated when protection is enabled)
-    --bundle-url <url>       Use pre-built esbuild bundle instead of npm install
-    --skip-clone             Use --dir as-is without cloning or pulling
+    --bundle-url <url>       Use a specific pre-built OpenClaw bundle URL
+    --no-bundle              Do not auto-use the latest published OpenClaw bundle
+    --clone                  Clone/update vercel-openclaw into --dir or the managed workspace
+    --skip-clone             Deprecated; --dir now uses the directory as-is by default
     --skip-redis             Skip Redis provisioning (use existing)
     --skip-deploy            Stop after provisioning, don't deploy
     --yes                    Skip confirmation prompts

@@ -1,11 +1,15 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { checkPrereqs } from "../steps/prereqs.mjs";
 import { cloneRepo } from "../steps/clone.mjs";
 import { linkProject } from "../steps/link.mjs";
 import { provisionRedis } from "../steps/redis.mjs";
+import { resolveCreateBundleUrl } from "../steps/bundle.mjs";
+import {
+  resolveManagedWorkspace,
+  writeManagedWorkspaceMetadata,
+} from "../steps/workspace.mjs";
 import { buildManagedEnvVars, pushEnvVars, readLinkedProject } from "../steps/env.mjs";
 import {
   deploy,
@@ -38,7 +42,6 @@ import { isInteractive, log, prompt, promptMasked, step, success, warn } from ".
 import { registerClaw, suggestClawName, validateClawName } from "../registry.mjs";
 
 const DEFAULT_NAME = "vercel-openclaw";
-const DEFAULT_DIR = "./vercel-openclaw";
 
 export function shouldInvokeSlackProvisioning({
   preselectedBranch,
@@ -190,16 +193,6 @@ async function resolveScope(canPrompt) {
   };
 }
 
-function findAvailableDir(base) {
-  const target = resolve(base);
-  if (!existsSync(target)) return base;
-  for (let i = 2; i < 1000; i += 1) {
-    const candidate = `${base}-${i}`;
-    if (!existsSync(resolve(candidate))) return candidate;
-  }
-  return `${base}-${Date.now()}`;
-}
-
 export async function create(argv) {
   const { values } = parseArgs({
     args: argv,
@@ -223,6 +216,8 @@ export async function create(argv) {
       "slack-app-name": { type: "string" },
       "slack-skip": { type: "boolean", default: false },
       "bundle-url": { type: "string" },
+      "no-bundle": { type: "boolean", default: false },
+      clone: { type: "boolean", default: false },
       "skip-clone": { type: "boolean", default: false },
       "skip-redis": { type: "boolean", default: false },
       yes: { type: "boolean", short: "y", default: false },
@@ -363,14 +358,14 @@ export async function create(argv) {
     warn(`Could not update Vercel active team: ${err.message}`);
   }
 
-  // 3. Resolve clone directory (prompt with smart default)
-  let dir = values.dir;
-  if (!dir) {
-    const suggested = findAvailableDir(DEFAULT_DIR);
-    dir = canPrompt
-      ? await prompt("Clone vercel-openclaw into which directory?", suggested)
-      : suggested;
+  if (values.clone && values["skip-clone"]) {
+    throw new Error("Pass only one of --clone or --skip-clone.");
   }
+
+  // 3. Resolve optional local directory. By default vclaw owns a managed
+  // workspace under ~/.vclaw/<scope>/<project>/app so users do not need to
+  // choose or maintain a checkout just to deploy OpenClaw.
+  let dir = values.dir;
 
   // 4. Resolve Vercel project name (prompt if default is taken)
   let name = values.name;
@@ -422,12 +417,22 @@ export async function create(argv) {
     }
   }
 
-  // 5. Clone (or use existing dir as-is with --skip-clone)
+  // 5. Resolve deploy workspace. Default: managed hidden checkout. Advanced:
+  // --dir uses an existing local project as-is, --clone clones/updates into it.
   let projectDir;
-  if (values["skip-clone"]) {
+  let managedWorkspace = null;
+  if (dir && !values.clone) {
     projectDir = resolve(dir);
-    log(`Using local checkout at ${projectDir} (--skip-clone)`);
+    log(`Using local project at ${projectDir}`);
   } else {
+    if (!dir) {
+      managedWorkspace = resolveManagedWorkspace({
+        scope: activeSlug || scope || "personal",
+        projectName: name,
+      });
+      dir = managedWorkspace.appDir;
+      log(`Using managed workspace at ${managedWorkspace.workspaceDir}`);
+    }
     projectDir = await cloneRepo(dir);
   }
 
@@ -543,15 +548,31 @@ export async function create(argv) {
   }
 
   // 10. Generate and push env vars
+  const bundleUrl = await resolveCreateBundleUrl({
+    explicitUrl: values["bundle-url"],
+    skipDefault: values["no-bundle"],
+  });
   const { adminSecret, vars } = buildManagedEnvVars({
     adminSecret: resolvedAdminSecret,
     cronSecret: values["cron-secret"],
     protectionBypassSecret,
     projectScope: activeSlug || scope || null,
     projectName: name,
-    bundleUrl: values["bundle-url"],
+    bundleUrl,
   });
   await pushEnvVars(projectDir, vars);
+
+  if (managedWorkspace) {
+    writeManagedWorkspaceMetadata(managedWorkspace, {
+      projectName: name,
+      clawName,
+      scope: scope || null,
+      activeSlug: activeSlug || null,
+      projectDir,
+      bundleUrl: bundleUrl || null,
+      updatedAt: new Date().toISOString(),
+    });
+  }
 
   if (values["skip-deploy"]) {
     warn("Skipping deploy (--skip-deploy). Run `vclaw verify` after deploying.");
@@ -737,6 +758,7 @@ export async function create(argv) {
     scope: scope || undefined,
     verifiedUrl: verifyUrl,
     verifiedAt: new Date().toISOString(),
+    managedWorkspace: managedWorkspace?.workspaceDir,
     channels: {
       telegram: telegramConnected
         ? { status: "connected" }

@@ -14,7 +14,7 @@
 npx @vercel/vclaw create
 ```
 
-`vclaw` clones OpenClaw, links a Vercel project, provisions Redis, pushes managed env vars, deploys to production, and runs launch verification.
+`vclaw` creates a managed workspace under `~/.vclaw`, links a Vercel project, provisions Redis, grabs the latest published OpenClaw bundle, deploys to production, and runs launch verification.
 
 ### With a Telegram bot
 
@@ -80,7 +80,10 @@ npx @vercel/vclaw create --skip-deploy
 ```text
 --name <name>                      Vercel project name (default: openclaw)
 --scope <scope>                    Vercel team scope
---dir <path>                       Clone destination (default: ./vercel-openclaw)
+--dir <path>                       Use an existing local vercel-openclaw project directory
+--clone                            Clone/update vercel-openclaw into --dir or managed workspace
+--bundle-url <url>                 Use a specific published OpenClaw bundle
+--no-bundle                        Do not auto-use the latest published OpenClaw bundle
 --admin-secret <hex>               Admin-dashboard password (prompted if omitted)
 --cron-secret <hex>                Optional dedicated cron secret
 --deployment-protection <mode>     none | sso | password
