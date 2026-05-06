@@ -46,9 +46,9 @@ test("provisionSlack: connect branch routes to PUT /api/channels/slack and polls
     }
     if (url.endsWith("/api/channels/summary")) {
       // connectSlack now polls summary after a successful PUT and requires
-      // two consecutive configured && connected reads.
+      // two consecutive delivery-ready reads.
       return jsonResponse(200, {
-        slack: { configured: true, connected: true },
+        slack: { configured: true, connected: true, deliveryReady: true },
       });
     }
     return jsonResponse(404, {});
@@ -87,7 +87,7 @@ test("provisionSlack: connect branch fails when summary never reports connected=
     }
     if (url.endsWith("/api/channels/summary")) {
       return jsonResponse(200, {
-        slack: { configured: true, connected: false },
+        slack: { configured: true, connected: false, deliveryReady: false },
       });
     }
     return jsonResponse(404, {});
@@ -128,11 +128,11 @@ test("provisionSlack: explicit configToken selects create branch, calls POST /ap
       statusCalls += 1;
       if (statusCalls >= 2) {
         return jsonResponse(200, {
-          slack: { configured: true, connected: true },
+          slack: { configured: true, connected: true, deliveryReady: true },
         });
       }
       return jsonResponse(200, {
-        slack: { configured: false, connected: false },
+        slack: { configured: false, connected: false, deliveryReady: false },
       });
     }
     return jsonResponse(404, {});
@@ -144,7 +144,7 @@ test("provisionSlack: explicit configToken selects create branch, calls POST /ap
       appName: "My Custom Bot",
       pollTimeoutMs: 5_000,
       // The create-branch readiness gate now requires TWO consecutive
-      // configured && connected reads (same as connect-branch). Use a tight
+      // delivery-ready reads (same as connect-branch). Use a tight
       // interval so all three polls (1× negative, 2× positive) fit within
       // the 5s budget.
       pollIntervalMs: 50,
@@ -174,7 +174,7 @@ test("provisionSlack: explicit configToken selects create branch, calls POST /ap
   }
 });
 
-test("provisionSlack: configured===true alone does NOT report success — connected must also be true", async () => {
+test("provisionSlack: configured and connected without deliveryReady does NOT report success", async () => {
   const openedUrls = [];
   let statusCalls = 0;
   const stub = installFetchStub((url) => {
@@ -192,7 +192,7 @@ test("provisionSlack: configured===true alone does NOT report success — connec
       // The poll must keep waiting until connected flips true; if the poll
       // window expires first, the result reports configured=false.
       return jsonResponse(200, {
-        slack: { configured: true, connected: false },
+        slack: { configured: true, connected: false, deliveryReady: false },
       });
     }
     return jsonResponse(404, {});
@@ -204,12 +204,62 @@ test("provisionSlack: configured===true alone does NOT report success — connec
       openBrowser: (url) => openedUrls.push(url),
     });
     assert.equal(res.branch, "create");
+    assert.equal(res.configured, true);
     assert.equal(
-      res.configured,
+      res.deliveryReady,
       false,
-      "summary reporting configured-but-not-connected must not be treated as ready"
+      "summary reporting credentials without delivery readiness must not be treated as ready"
     );
     assert.ok(statusCalls > 0, "expected the summary poll to actually run");
+  } finally {
+    stub.restore();
+  }
+});
+
+test("provisionSlack: create branch surfaces connected:true when delivery lag prevents deliveryReady (soft-fail diagnostics)", async () => {
+  // Gateway sync is slow on a cold deploy: configured+connected flip true,
+  // but liveConfigFresh/deliveryReady stay false within the poll window.
+  // The result must surface connected:true so the caller can distinguish
+  // "real auth failure" from "propagation lag" and pick the soft-fail path.
+  const openedUrls = [];
+  const stub = installFetchStub((url) => {
+    if (url.endsWith("/api/channels/slack/app")) {
+      return jsonResponse(200, {
+        appId: "A1",
+        appName: "my-bot",
+        installUrl: "https://openclaw.example/install-url",
+      });
+    }
+    if (url.endsWith("/api/channels/summary")) {
+      return jsonResponse(200, {
+        slack: {
+          configured: true,
+          connected: true,
+          deliveryReady: false,
+          routeReady: false,
+          liveConfigFresh: false,
+        },
+      });
+    }
+    return jsonResponse(404, {});
+  });
+  try {
+    const res = await provisionSlack("https://openclaw.example", "admin", {
+      configToken: "xoxe.xoxp-abc",
+      pollTimeoutMs: 50,
+      pollIntervalMs: 5,
+      openBrowser: (url) => openedUrls.push(url),
+    });
+    assert.equal(res.branch, "create");
+    assert.equal(res.ok, true);
+    assert.equal(res.configured, true);
+    assert.equal(
+      res.connected,
+      true,
+      "connected must be surfaced so callers can pick the soft-fail (delivery-pending) path",
+    );
+    assert.equal(res.deliveryReady, false);
+    assert.ok(res.diagnostics, "diagnostics from the last poll must be returned");
   } finally {
     stub.restore();
   }

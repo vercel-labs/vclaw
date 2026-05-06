@@ -52,6 +52,7 @@ export async function provisionSlack(
     // server-side auth.test result to become consistent on /api/channels/summary
     // — no browser hop, so a few seconds is plenty in practice.
     connectReadyTimeoutMs = 30_000,
+    connectReadyPollIntervalMs,
     openBrowser = defaultOpenBrowser,
   } = {},
 ) {
@@ -106,8 +107,23 @@ export async function provisionSlack(
         // is actually serviceable.
         waitForReady: true,
         readyPollTimeoutMs: connectReadyTimeoutMs,
+        readyPollIntervalMs: connectReadyPollIntervalMs,
       });
-      return { branch: "connect", ok: res.ok, configured: res.ok };
+      const readiness = res.ok
+        ? await waitForSlackDeliveryReady(url, adminSecret, {
+            protectionBypassSecret,
+            timeoutMs: connectReadyTimeoutMs,
+            pollIntervalMs: connectReadyPollIntervalMs,
+          })
+        : { configured: false, connected: false, deliveryReady: false, diagnostics: null };
+      return {
+        branch: "connect",
+        ok: res.ok,
+        configured: readiness.configured,
+        connected: readiness.connected,
+        deliveryReady: readiness.deliveryReady,
+        diagnostics: readiness.diagnostics,
+      };
     }
     const res = await connectSlack(url, adminSecret, {
       botToken: bot,
@@ -115,8 +131,23 @@ export async function provisionSlack(
       protectionBypassSecret,
       waitForReady: true,
       readyPollTimeoutMs: connectReadyTimeoutMs,
+      readyPollIntervalMs: connectReadyPollIntervalMs,
     });
-    return { branch: "connect", ok: res.ok, configured: res.ok };
+    const readiness = res.ok
+      ? await waitForSlackDeliveryReady(url, adminSecret, {
+          protectionBypassSecret,
+          timeoutMs: connectReadyTimeoutMs,
+          pollIntervalMs: connectReadyPollIntervalMs,
+        })
+      : { configured: false, connected: false, deliveryReady: false, diagnostics: null };
+    return {
+      branch: "connect",
+      ok: res.ok,
+      configured: readiness.configured,
+      connected: readiness.connected,
+      deliveryReady: readiness.deliveryReady,
+      diagnostics: readiness.diagnostics,
+    };
   }
 
   // branch === "create"
@@ -202,7 +233,7 @@ export async function provisionSlack(
     ageMs: Date.now() - mintedAt,
   });
 
-  const configured = await waitForSlackConfigured(url, adminSecret, {
+  const readiness = await waitForSlackDeliveryReady(url, adminSecret, {
     protectionBypassSecret,
     timeoutMs: pollTimeoutMs,
     pollIntervalMs,
@@ -213,7 +244,10 @@ export async function provisionSlack(
   return {
     branch: "create",
     ok: true,
-    configured,
+    configured: readiness.configured,
+    connected: readiness.connected,
+    deliveryReady: readiness.deliveryReady,
+    diagnostics: readiness.diagnostics,
     installUrl,
     appId: created.body.appId ?? null,
     appName: created.body.appName ?? null,
@@ -263,9 +297,9 @@ async function promptConnectCredentials({ existingBot = "", existingSig = "" } =
   return { botToken, signingSecret };
 }
 
-// ── Poll /api/channels/summary until slack.configured === true ──
+// ── Poll /api/channels/summary until Slack delivery is ready ──
 
-export async function waitForSlackConfigured(
+export async function waitForSlackDeliveryReady(
   url,
   adminSecret,
   {
@@ -280,7 +314,7 @@ export async function waitForSlackConfigured(
   const endpoint = `${base}/api/channels/summary`;
   const headers = buildAuthHeaders(adminSecret, protectionBypassSecret);
 
-  debug("waitForSlackConfigured.start", {
+  debug("waitForSlackDeliveryReady.start", {
     endpoint,
     timeoutMs,
     pollIntervalMs,
@@ -292,28 +326,28 @@ export async function waitForSlackConfigured(
   const spin = spinner("Waiting for Slack OAuth to complete in your browser");
   const start = Date.now();
   let attempt = 0;
-  // Require TWO consecutive `configured && connected` polls before declaring
-  // success — same shape as connect-slack.mjs. Either bit can flicker during
-  // OAuth+cache convergence on Vercel; a single positive sample has produced
-  // false-success runs that ship deployments which then 401 every Slack
-  // message at runtime.
+  // Require TWO consecutive delivery-ready polls before declaring success.
+  // Credentials can be saved before the sandbox has mounted /slack/events;
+  // accepting that intermediate state produced false-green Slack deploys.
   let stableHits = 0;
+  let lastPoll = null;
   const REQUIRED_STABLE_HITS = 2;
   try {
     while (Date.now() - start < timeoutMs) {
       attempt += 1;
-      const poll = await readSlackConfigured(endpoint, headers);
-      debug("waitForSlackConfigured.poll", {
+      const poll = await readSlackDeliveryState(endpoint, headers);
+      lastPoll = poll;
+      debug("waitForSlackDeliveryReady.poll", {
         attempt,
         elapsedMs: Date.now() - start,
         stableHits,
         ...poll,
       });
-      if (poll.configured === true && poll.connected === true) {
+      if (poll.configured === true && poll.connected === true && poll.deliveryReady === true) {
         stableHits += 1;
         if (stableHits >= REQUIRED_STABLE_HITS) {
-          spin.succeed("Slack connected");
-          return true;
+          spin.succeed("Slack delivery ready");
+          return { configured: true, connected: true, deliveryReady: true, diagnostics: poll };
         }
       } else {
         stableHits = 0;
@@ -321,9 +355,9 @@ export async function waitForSlackConfigured(
       const elapsed = Math.round((Date.now() - start) / 1000);
       const stage =
         poll.configured === true && poll.connected !== true
-          ? "verifying Slack auth"
+          ? "verifying Slack delivery"
           : poll.configured === true && stableHits > 0
-            ? "confirming Slack readiness"
+            ? "confirming Slack delivery"
             : "waiting for Slack OAuth";
       spin.update(`${stage[0].toUpperCase()}${stage.slice(1)} — ${elapsed}s`);
       await new Promise((r) => setTimeout(r, pollIntervalMs));
@@ -332,15 +366,20 @@ export async function waitForSlackConfigured(
     warn(
       "You can always finish the install later from the admin panel — the app was created and credentials are stored.",
     );
-    return false;
+    return {
+      configured: lastPoll?.configured === true,
+      connected: lastPoll?.connected === true,
+      deliveryReady: false,
+      diagnostics: lastPoll ?? { reason: "timeout" },
+    };
   } catch (err) {
     spin.fail(`Slack status poll failed: ${err?.message ?? err}`);
-    debug("waitForSlackConfigured.error", { error: err?.message ?? String(err) });
-    return false;
+    debug("waitForSlackDeliveryReady.error", { error: err?.message ?? String(err) });
+    return { configured: false, connected: false, deliveryReady: false, diagnostics: { reason: err?.message ?? String(err) } };
   }
 }
 
-async function readSlackConfigured(endpoint, headers) {
+async function readSlackDeliveryState(endpoint, headers) {
   try {
     const res = await fetch(endpoint, {
       headers,
@@ -367,6 +406,10 @@ async function readSlackConfigured(endpoint, headers) {
         configured: slack.configured,
         status: res.status,
         connected: slack.connected ?? null,
+        deliveryReady: slack.deliveryReady ?? null,
+        routeReady: slack.routeReady ?? null,
+        liveConfigFresh: slack.liveConfigFresh ?? null,
+        readiness: slack.readiness ?? null,
       };
     }
     return {

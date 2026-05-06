@@ -82,7 +82,95 @@ test("evaluateSlackProvisioningOutcome: explicit create branch with ok:true / co
 test("evaluateSlackProvisioningOutcome: success returns ok", () => {
   const decision = evaluateSlackProvisioningOutcome({
     slackExplicit: true,
-    result: { branch: "create", ok: true, configured: true },
+    result: { branch: "create", ok: true, configured: true, deliveryReady: true },
   });
   assert.equal(decision.kind, "ok");
+});
+
+test("evaluateSlackProvisioningOutcome: explicit Slack with credentials but no delivery readiness is fatal", () => {
+  const decision = evaluateSlackProvisioningOutcome({
+    slackExplicit: true,
+    result: {
+      branch: "create",
+      ok: true,
+      configured: true,
+      deliveryReady: false,
+      diagnostics: {
+        deliveryReady: false,
+        routeReady: false,
+        liveConfigFresh: false,
+        readiness: {
+          configSyncOutcome: "failed",
+          reason: "Slack route did not become ready after config sync restart",
+        },
+      },
+    },
+  });
+  assert.equal(decision.kind, "throw");
+  assert.equal(decision.code, "explicit-delivery-not-ready");
+  assert.match(decision.message, /Slack delivery is not ready/);
+  assert.match(decision.message, /routeReady=false/);
+  assert.match(decision.message, /Slack route did not become ready/);
+});
+
+test("evaluateSlackProvisioningOutcome: configured+connected without deliveryReady is soft-fail (warn) by default", () => {
+  // The new degraded-mode path: gateway sync (liveConfigFresh) hasn't flipped
+  // yet on a cold deploy, but credentials are saved and auth.test passed.
+  // We must NOT fail the entire deploy — warn and continue.
+  const decision = evaluateSlackProvisioningOutcome({
+    slackExplicit: true,
+    result: {
+      branch: "create",
+      ok: true,
+      configured: true,
+      connected: true,
+      deliveryReady: false,
+      diagnostics: {
+        deliveryReady: false,
+        routeReady: false,
+        liveConfigFresh: false,
+      },
+    },
+  });
+  assert.equal(decision.kind, "warn");
+  assert.equal(decision.code, "delivery-pending");
+  assert.match(decision.message, /delivery is still propagating/i);
+  assert.match(decision.message, /VCLAW_STRICT_SLACK_DELIVERY/);
+  assert.match(decision.message, /liveConfigFresh=false/);
+});
+
+test("evaluateSlackProvisioningOutcome: configured+connected without deliveryReady is fatal under strictDelivery", () => {
+  // CI sets VCLAW_STRICT_SLACK_DELIVERY=1 to restore the old fail-closed behavior.
+  const decision = evaluateSlackProvisioningOutcome({
+    slackExplicit: true,
+    strictDelivery: true,
+    result: {
+      branch: "create",
+      ok: true,
+      configured: true,
+      connected: true,
+      deliveryReady: false,
+      diagnostics: { deliveryReady: false, routeReady: false },
+    },
+  });
+  assert.equal(decision.kind, "throw");
+  assert.equal(decision.code, "explicit-delivery-not-ready");
+});
+
+test("evaluateSlackProvisioningOutcome: configured but never connected stays fatal (real auth failure, not propagation lag)", () => {
+  // The hard-fail path must still fire when connected never flipped — that's
+  // a real misconfiguration (bad bot token, auth.test failed), not a slow gateway.
+  const decision = evaluateSlackProvisioningOutcome({
+    slackExplicit: true,
+    result: {
+      branch: "create",
+      ok: true,
+      configured: true,
+      connected: false,
+      deliveryReady: false,
+      diagnostics: { deliveryReady: false },
+    },
+  });
+  assert.equal(decision.kind, "throw");
+  assert.equal(decision.code, "explicit-delivery-not-ready");
 });
