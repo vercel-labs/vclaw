@@ -62,7 +62,30 @@ export function shouldInvokeSlackProvisioning({
  *   "explicit-not-ok"    — slackExplicit && branch !== "skip" && !ok
  *   "explicit-not-configured" — slackExplicit && create-branch ok:true / configured:false
  */
-export function evaluateSlackProvisioningOutcome({ slackExplicit, result }) {
+
+function formatSlackDiagnostics(diagnostics) {
+  if (!diagnostics || typeof diagnostics !== "object") return "";
+  const parts = [];
+  const readiness = diagnostics.readiness && typeof diagnostics.readiness === "object"
+    ? diagnostics.readiness
+    : null;
+  const routeReady = diagnostics.routeReady ?? null;
+  const liveConfigFresh = diagnostics.liveConfigFresh ?? null;
+  const deliveryReady = diagnostics.deliveryReady ?? null;
+  const reason = readiness?.reason ?? diagnostics.reason ?? null;
+  const outcome = readiness?.configSyncOutcome ?? null;
+  const message = readiness?.operatorMessage ?? null;
+
+  if (deliveryReady !== null) parts.push("deliveryReady=" + deliveryReady);
+  if (routeReady !== null) parts.push("routeReady=" + routeReady);
+  if (liveConfigFresh !== null) parts.push("liveConfigFresh=" + liveConfigFresh);
+  if (outcome) parts.push("configSync=" + outcome);
+  if (reason) parts.push("reason=" + reason);
+  if (message) parts.push("message=" + message);
+
+  return parts.length > 0 ? " Details: " + parts.join("; ") + "." : "";
+}
+export function evaluateSlackProvisioningOutcome({ slackExplicit, result, strictDelivery = false }) {
   if (slackExplicit && result.branch === "skip") {
     return {
       kind: "throw",
@@ -88,6 +111,60 @@ export function evaluateSlackProvisioningOutcome({ slackExplicit, result }) {
       message:
         "Slack was not fully connected. The deployment is otherwise healthy — " +
         "retry from the admin panel or re-run vclaw create with valid --slack-* values.",
+    };
+  }
+  // Degraded-mode soft-fail: Slack credentials are saved AND auth.test passed
+  // (configured && connected) but the gateway-side delivery surface
+  // (liveConfigFresh/routeReady) hasn't flipped within the poll window. This
+  // is a known cold-deploy lag that resolves on its own — failing the entire
+  // `vclaw create` here is too strict. We warn loudly with the diagnostics
+  // the polling collected and let the deploy land. Users can re-run
+  // verification later, or set VCLAW_STRICT_SLACK_DELIVERY=1 (used by CI) to
+  // restore the old fail-closed behavior.
+  if (
+    slackExplicit &&
+    result.branch !== "skip" &&
+    result.ok &&
+    result.configured === true &&
+    result.connected === true &&
+    result.deliveryReady !== true
+  ) {
+    if (!strictDelivery) {
+      return {
+        kind: "warn",
+        code: "delivery-pending",
+        message:
+          "Slack credentials are saved and auth.test passed, but delivery is still propagating " +
+          "(liveConfigFresh/routeReady not yet true). Marking Slack as connected (delivery pending) " +
+          "and continuing — re-run `vclaw verify` in a minute, or set VCLAW_STRICT_SLACK_DELIVERY=1 " +
+          "to fail-closed instead." +
+          formatSlackDiagnostics(result.diagnostics),
+      };
+    }
+    return {
+      kind: "throw",
+      code: "explicit-delivery-not-ready",
+      message:
+        "Slack credentials were saved, but OpenClaw Slack delivery is not ready." +
+        formatSlackDiagnostics(result.diagnostics),
+    };
+  }
+  // Hard fail still applies: configured=true but never reached connected=true
+  // (e.g. auth.test failed) — that's a real misconfiguration, not propagation lag.
+  if (
+    slackExplicit &&
+    result.branch !== "skip" &&
+    result.ok &&
+    result.configured === true &&
+    result.connected !== true &&
+    result.deliveryReady !== true
+  ) {
+    return {
+      kind: "throw",
+      code: "explicit-delivery-not-ready",
+      message:
+        "Slack credentials were saved, but OpenClaw Slack delivery is not ready." +
+        formatSlackDiagnostics(result.diagnostics),
     };
   }
   if (
@@ -193,7 +270,39 @@ async function resolveScope(canPrompt) {
   };
 }
 
-export async function create(argv) {
+export function createDefaultDeps() {
+  return {
+    checkPrereqs,
+    resolveScope,
+    readVercelToken,
+    getTeamBySlug,
+    getUser,
+    setActiveTeam,
+    findAvailableProjectName,
+    cloneRepo,
+    linkProject,
+    provisionRedis,
+    configureProjectProtection,
+    getProject,
+    readProtectionState,
+    ensureAutomationBypassSecret,
+    resolveCreateBundleUrl,
+    pushEnvVars,
+    deploy,
+    readLinkedProject,
+    waitForDeploymentReady,
+    getDeployment,
+    getProductionAlias,
+    runVerify,
+    connectTelegram,
+    provisionSlack,
+    registerClaw,
+    writeManagedWorkspaceMetadata,
+    openInBrowser,
+  };
+}
+
+export async function create(argv, deps = createDefaultDeps()) {
   const { values } = parseArgs({
     args: argv,
     options: {
@@ -298,7 +407,7 @@ export async function create(argv) {
   log("vclaw create — setting up vercel-openclaw\n");
 
   // 1. Check local prereqs
-  await checkPrereqs({ requireVercelAuth: true });
+  await deps.checkPrereqs({ requireVercelAuth: true });
 
   const canPrompt = isInteractive() && !values.yes;
 
@@ -307,7 +416,7 @@ export async function create(argv) {
   let pickedPersonal = !scope;
   let pickedTeamId;
   if (!scope) {
-    const resolved = await resolveScope(canPrompt);
+    const resolved = await deps.resolveScope(canPrompt);
     scope = resolved.scope;
     activeSlug = resolved.activeSlug;
     pickedPersonal = resolved.isPersonal;
@@ -315,15 +424,15 @@ export async function create(argv) {
   } else {
     // An explicit --scope still needs its teamId resolved so we can align the
     // CLI's active team for browser-based flows (marketplace checkout, etc).
-    const token = readVercelToken();
+    const token = deps.readVercelToken();
     if (token) {
       try {
-        const team = await getTeamBySlug(token, scope);
+        const team = await deps.getTeamBySlug(token, scope);
         if (team?.id) {
           pickedTeamId = team.id;
           pickedPersonal = false;
         } else {
-          const user = await getUser(token).catch(() => null);
+          const user = await deps.getUser(token).catch(() => null);
           if (user && user.username === scope) {
             pickedPersonal = user.version !== "northstar";
             pickedTeamId = user.version === "northstar" ? user.defaultTeamId : undefined;
@@ -342,11 +451,11 @@ export async function create(argv) {
   // scope — we always route to a team id.
   try {
     if (pickedPersonal) {
-      if (setActiveTeam(null)) {
+      if (deps.setActiveTeam(null)) {
         success("Active Vercel team cleared (personal scope)");
       }
     } else if (pickedTeamId) {
-      if (setActiveTeam(pickedTeamId)) {
+      if (deps.setActiveTeam(pickedTeamId)) {
         success(`Active Vercel team set to "${activeSlug}"`);
       } else {
         warn(
@@ -377,12 +486,12 @@ export async function create(argv) {
   } else {
     let suggested = DEFAULT_NAME;
     try {
-      const token = readVercelToken();
+      const token = deps.readVercelToken();
       // Probe GET /v9/projects/{name} per candidate and early-exit on 404.
       // Faster than paginating every project in the team (thousands of
       // projects in vercel-labs) just to check one name.
       if (token) {
-        const { name: picked, baseTaken } = await findAvailableProjectName(
+        const { name: picked, baseTaken } = await deps.findAvailableProjectName(
           token,
           DEFAULT_NAME,
           pickedTeamId
@@ -433,11 +542,11 @@ export async function create(argv) {
       dir = managedWorkspace.appDir;
       log(`Using managed workspace at ${managedWorkspace.workspaceDir}`);
     }
-    projectDir = await cloneRepo(dir);
+    projectDir = await deps.cloneRepo(dir);
   }
 
   // 6. Link to Vercel
-  const linked = await linkProject(projectDir, name, scope);
+  const linked = await deps.linkProject(projectDir, name, scope);
 
   // 6a. Name your claw. The registry write is DEFERRED until after verify
   //     succeeds (step 12) — writing it here would leave a half-created
@@ -474,14 +583,14 @@ export async function create(argv) {
   if (values["skip-redis"]) {
     warn("Skipping Redis provisioning (--skip-redis)");
   } else {
-    await provisionRedis(projectDir, scope, linked, values.yes);
+    await deps.provisionRedis(projectDir, scope, linked, values.yes);
   }
 
   // 8. Configure project protection when requested
   let {
     protectionBypassSecret,
     protectionFreshlyApplied,
-  } = await configureProjectProtection(linked, protectionPlan);
+  } = await deps.configureProjectProtection(linked, protectionPlan);
 
   // 8a. Auto-detect pre-existing protection on the project (most common when
   // reusing an existing project) and ensure we have an automation bypass
@@ -490,16 +599,16 @@ export async function create(argv) {
   // --protection-bypass-secret would silently get 401/403 at verify time.
   if (!protectionBypassSecret) {
     try {
-      const token = readVercelToken();
+      const token = deps.readVercelToken();
       if (token && linked?.projectId) {
-        const project = await getProject(token, linked.projectId, linked.teamId);
-        const state = readProtectionState(project);
+        const project = await deps.getProject(token, linked.projectId, linked.teamId);
+        const state = deps.readProtectionState(project);
         if (state.enabled) {
           warn(
             `Deployment protection detected (${state.activeTypes.join(", ")}) — ` +
               `generating an automation bypass secret so verify can reach /api/admin.`
           );
-          const { secret, created } = await ensureAutomationBypassSecret(
+          const { secret, created } = await deps.ensureAutomationBypassSecret(
             token,
             linked.projectId,
             linked.teamId,
@@ -548,7 +657,7 @@ export async function create(argv) {
   }
 
   // 10. Generate and push env vars
-  const bundleUrl = await resolveCreateBundleUrl({
+  const bundleUrl = await deps.resolveCreateBundleUrl({
     explicitUrl: values["bundle-url"],
     skipDefault: values["no-bundle"],
   });
@@ -560,10 +669,10 @@ export async function create(argv) {
     projectName: name,
     bundleUrl,
   });
-  await pushEnvVars(projectDir, vars);
+  await deps.pushEnvVars(projectDir, vars);
 
   if (managedWorkspace) {
-    writeManagedWorkspaceMetadata(managedWorkspace, {
+    deps.writeManagedWorkspaceMetadata(managedWorkspace, {
       projectName: name,
       clawName,
       scope: scope || null,
@@ -580,7 +689,7 @@ export async function create(argv) {
   }
 
   // 11. Deploy
-  const deployUrl = await deploy(projectDir, scope, values.yes);
+  const deployUrl = await deps.deploy(projectDir, scope, values.yes);
 
   // Unique deployment URLs (*-hash-team.vercel.app) are gated by Vercel's
   // Standard Protection SSO even when the project-level toggle is "off",
@@ -597,14 +706,14 @@ export async function create(argv) {
   // outside any catch — a terminal ERROR/CANCELED or a 5-minute timeout
   // means we cannot meaningfully verify, so abort instead of degrading
   // into "verify against the unverified URL anyway."
-  const token = readVercelToken();
+  const token = deps.readVercelToken();
   let verifyUrl = deployUrl;
   let verifyTargetSource = "cli-deploy-url";
   if (token) {
-    const { projectId, teamId } = readLinkedProject(projectDir);
+    const { projectId, teamId } = deps.readLinkedProject(projectDir);
 
-    const readyResult = await waitForDeploymentReady({
-      read: () => getDeployment(token, deployUrl, teamId),
+    const readyResult = await deps.waitForDeploymentReady({
+      read: () => deps.getDeployment(token, deployUrl, teamId),
       intervalMs: isReplay() ? 0 : 3_000,
       timeoutMs: isReplay() ? 1_000 : 5 * 60_000,
     });
@@ -622,12 +731,12 @@ export async function create(argv) {
     // verify against the unique deployment URL, just with a louder warning
     // when there is no bypass secret to defeat Standard Protection.
     try {
-      const project = await getProject(token, projectId, teamId);
+      const project = await deps.getProject(token, projectId, teamId);
       const projectAliases = Array.isArray(project?.targets?.production?.alias)
         ? project.targets.production.alias.filter((a) => typeof a === "string")
         : [];
 
-      const rawPreferred = await getProductionAlias(token, projectId, teamId);
+      const rawPreferred = await deps.getProductionAlias(token, projectId, teamId);
       // getProductionAlias returns "https://<host>"; pickVerifyTarget compares
       // by bare hostname against deployment.alias[].
       const preferredHost = rawPreferred
@@ -673,7 +782,7 @@ export async function create(argv) {
   }
 
   // 12. Verify
-  await runVerify(verifyUrl, adminSecret, {
+  await deps.runVerify(verifyUrl, adminSecret, {
     protectionBypassSecret,
     protectionFreshlyApplied,
   });
@@ -684,7 +793,7 @@ export async function create(argv) {
   // misconfigured bot in production while the CLI prints "Done!".
   let telegramConnected = false;
   if (values.telegram) {
-    const res = await connectTelegram(
+    const res = await deps.connectTelegram(
       verifyUrl,
       adminSecret,
       values.telegram.trim(),
@@ -724,7 +833,7 @@ export async function create(argv) {
       Boolean(slackConfigToken) ||
       (Boolean(slackBotToken) && Boolean(slackSigningSecret));
     if (shouldInvoke) {
-      const result = await provisionSlack(verifyUrl, adminSecret, {
+      const result = await deps.provisionSlack(verifyUrl, adminSecret, {
         canPrompt,
         branch: preselectedBranch,
         configToken: slackConfigToken,
@@ -735,10 +844,14 @@ export async function create(argv) {
         protectionBypassSecret,
       });
       slackBranch = result.branch;
-      slackConnected = Boolean(result.configured);
+      slackConnected = Boolean(result.deliveryReady);
+      const strictDelivery =
+        process.env.VCLAW_STRICT_SLACK_DELIVERY === "1" ||
+        process.env.VCLAW_STRICT_SLACK_DELIVERY === "true";
       const decision = evaluateSlackProvisioningOutcome({
         slackExplicit,
         result,
+        strictDelivery,
       });
       if (decision.kind === "throw") throw new Error(decision.message);
       if (decision.kind === "warn") warn(decision.message);
@@ -750,7 +863,7 @@ export async function create(argv) {
   //     setup means a failed `--telegram` or `--slack-*` aborts the run
   //     without leaving a registered-but-broken claw that future
   //     `vclaw chat --name` calls would happily attach to.
-  registerClaw(clawName, {
+  deps.registerClaw(clawName, {
     projectId: linked.projectId,
     teamId: linked.teamId || undefined,
     projectDir,
@@ -810,7 +923,7 @@ export async function create(argv) {
   }
   log("  • See https://github.com/vercel-labs/vercel-openclaw for docs");
 
-  openInBrowser(verifyUrl);
+  deps.openInBrowser(verifyUrl);
 }
 
 function openInBrowser(url) {
