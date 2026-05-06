@@ -1,6 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { provisionSlack } from "./provision-slack.mjs";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// Redirect the slack credential cache to a per-process temp dir BEFORE
+// importing provision-slack, so tests that exercise the create branch don't
+// clobber the user's real ~/.config/vclaw/slack.json with fixture data.
+process.env.VCLAW_SLACK_CACHE_PATH = join(
+  mkdtempSync(join(tmpdir(), "vclaw-slack-cache-")),
+  "slack.json",
+);
+
+const { provisionSlack } = await import("./provision-slack.mjs");
 
 function installFetchStub(handler) {
   const calls = [];
@@ -261,6 +273,63 @@ test("provisionSlack: create branch surfaces connected:true when delivery lag pr
     assert.equal(res.deliveryReady, false);
     assert.ok(res.diagnostics, "diagnostics from the last poll must be returned");
   } finally {
+    stub.restore();
+  }
+});
+
+test("provisionSlack: gateway-not-ready timeout emits actionable diagnostic pointing at vclaw doctor", async () => {
+  // The hung-gateway regression: webhook accepted, workflow started, but
+  // routeReady/liveConfigFresh never flip. configured && connected are true;
+  // deliveryReady stays false. The diagnostic must mention `vclaw doctor`.
+  const openedUrls = [];
+  const stub = installFetchStub((url) => {
+    if (url.endsWith("/api/channels/slack/app")) {
+      return jsonResponse(200, {
+        appId: "A1",
+        appName: "my-bot",
+        installUrl: "https://openclaw.example/install-url",
+      });
+    }
+    if (url.endsWith("/api/channels/summary")) {
+      return jsonResponse(200, {
+        slack: {
+          configured: true,
+          connected: true,
+          deliveryReady: false,
+          routeReady: false,
+          liveConfigFresh: false,
+        },
+      });
+    }
+    return jsonResponse(404, {});
+  });
+  const originalLog = console.log;
+  const captured = [];
+  console.log = (msg) => {
+    captured.push(typeof msg === "string" ? msg : String(msg));
+  };
+  try {
+    const res = await provisionSlack("https://openclaw.example", "admin", {
+      configToken: "xoxe.xoxp-abc",
+      pollTimeoutMs: 50,
+      pollIntervalMs: 5,
+      openBrowser: (url) => openedUrls.push(url),
+    });
+    assert.equal(res.deliveryReady, false);
+    assert.equal(res.connected, true);
+    const joined = captured.join("\n");
+    assert.match(
+      joined,
+      /vclaw doctor/,
+      "diagnostic must point operators at `vclaw doctor` when gateway delivery never becomes ready",
+    );
+    assert.match(
+      joined,
+      /Verifying config/,
+      "diagnostic should reference the user-visible Slack symptom",
+    );
+  } finally {
+    console.log = originalLog;
     stub.restore();
   }
 });

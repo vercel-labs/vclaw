@@ -9,12 +9,15 @@ import { buildAuthHeaders } from "./run-verify.mjs";
 import { createSlackApp } from "./create-slack-app.mjs";
 import { connectSlack } from "./connect-slack.mjs";
 
-const SLACK_CACHE_PATH = resolve(
-  homedir(),
-  ".config",
-  "vclaw",
-  "slack.json",
-);
+// Resolve lazily so VCLAW_SLACK_CACHE_PATH (and HOME, for tests) can be set
+// AFTER module load. A hardcoded constant captured the value at import time,
+// which made every test that exercised the cache-write path clobber the
+// user's real ~/.config/vclaw/slack.json with fixture data.
+function resolveSlackCachePath() {
+  const override = process.env.VCLAW_SLACK_CACHE_PATH?.trim();
+  if (override) return resolve(override);
+  return resolve(homedir(), ".config", "vclaw", "slack.json");
+}
 
 /**
  * Orchestrate Slack provisioning for a freshly-deployed openclaw instance.
@@ -363,12 +366,29 @@ export async function waitForSlackDeliveryReady(
       await new Promise((r) => setTimeout(r, pollIntervalMs));
     }
     spin.fail("Slack did not finish connecting in time");
-    warn(
-      "You can always finish the install later from the admin panel — the app was created and credentials are stored.",
-    );
+    const finalConfigured = lastPoll?.configured === true;
+    const finalConnected = lastPoll?.connected === true;
+    if (finalConfigured && finalConnected) {
+      // Credentials are saved AND auth.test passed — the gateway never flipped
+      // routeReady/liveConfigFresh/deliveryReady. This is the exact regression
+      // pattern that produces a hung "Verifying config…" placeholder in
+      // Slack: webhook accepts the event, workflow starts, sandbox gateway is
+      // wedged (often a stale lockfile after warm-restore). Point operators
+      // at the introspection tool instead of leaving them to guess.
+      warn(
+        "Slack credentials are saved and auth.test passed, but gateway delivery never became ready. " +
+          "If a real Slack message stays stuck on \"Verifying config…\" for >2 min, run " +
+          "`vclaw doctor --url <deployment>` for sandbox state introspection, " +
+          "and check `vercel logs <deployment>` for stale-lock or warm-restore errors.",
+      );
+    } else {
+      warn(
+        "You can always finish the install later from the admin panel — the app was created and credentials are stored.",
+      );
+    }
     return {
-      configured: lastPoll?.configured === true,
-      connected: lastPoll?.connected === true,
+      configured: finalConfigured,
+      connected: finalConnected,
       deliveryReady: false,
       diagnostics: lastPoll ?? { reason: "timeout" },
     };
@@ -427,8 +447,9 @@ async function readSlackDeliveryState(endpoint, headers) {
 
 export function readSlackCache() {
   try {
-    if (!existsSync(SLACK_CACHE_PATH)) return null;
-    const raw = readFileSync(SLACK_CACHE_PATH, "utf8");
+    const path = resolveSlackCachePath();
+    if (!existsSync(path)) return null;
+    const raw = readFileSync(path, "utf8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object") return parsed;
     return null;
@@ -438,19 +459,17 @@ export function readSlackCache() {
 }
 
 export function writeSlackCache(payload) {
+  const path = resolveSlackCachePath();
   try {
-    const dir = dirname(SLACK_CACHE_PATH);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    writeFileSync(SLACK_CACHE_PATH, JSON.stringify(payload, null, 2), {
-      mode: 0o600,
-    });
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, JSON.stringify(payload, null, 2), { mode: 0o600 });
   } catch (err) {
-    warn(`Could not write ${SLACK_CACHE_PATH}: ${err?.message ?? err}`);
+    warn(`Could not write ${path}: ${err?.message ?? err}`);
   }
 }
 
 export function slackCachePath() {
-  return SLACK_CACHE_PATH;
+  return resolveSlackCachePath();
 }
 
 // ── Default browser opener ──
