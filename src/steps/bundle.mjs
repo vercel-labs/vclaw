@@ -78,10 +78,7 @@ async function fetchJson(url) {
   return res.json();
 }
 
-async function latestBundleReleaseForRepo(repo) {
-  const releases = await fetchJson(
-    `https://api.github.com/repos/${repo}/releases?per_page=30`,
-  );
+export function selectLatestCompatibleBundleRelease({ repo, releases }) {
   if (!Array.isArray(releases)) return null;
 
   for (const release of releases) {
@@ -104,6 +101,13 @@ async function latestBundleReleaseForRepo(repo) {
     };
   }
   return null;
+}
+
+async function latestBundleReleaseForRepo(repo) {
+  const releases = await fetchJson(
+    `https://api.github.com/repos/${repo}/releases?per_page=30`,
+  );
+  return selectLatestCompatibleBundleRelease({ repo, releases });
 }
 
 export async function resolveLatestPublishedBundleUrl({
@@ -133,6 +137,7 @@ export async function resolveLatestPublishedBundleUrl({
     }
     throw new Error(
       `No compatible published OpenClaw bundle release found on GitHub remotes from ${repoDir}. ` +
+        `Checked remotes: ${repos.join(", ")}. ` +
         `Required assets: ${REQUIRED_BUNDLE_ASSETS.join(", ")}.`,
     );
   }

@@ -159,6 +159,10 @@ export function buildManagedEnvVars({
 
   if (bundleUrl) {
     vars.OPENCLAW_BUNDLE_URL = { value: bundleUrl, type: "plain" };
+    const packageSpec = deriveOpenclawPackageSpecFromBundleUrl(bundleUrl);
+    if (packageSpec) {
+      vars.OPENCLAW_PACKAGE_SPEC = { value: packageSpec, type: "plain" };
+    }
     // UI assets tarball — co-located with the bundle by convention.
     // Accept either openclaw.bundle.mjs (ESM, current) or openclaw.bundle.cjs (legacy).
     const uiUrl = bundleUrl.replace(/openclaw\.bundle\.(?:mjs|cjs)$/, "control-ui.tar.gz");
@@ -169,6 +173,22 @@ export function buildManagedEnvVars({
     adminSecret: resolvedAdminSecret,
     vars,
   };
+}
+
+export function deriveOpenclawPackageSpecFromBundleUrl(bundleUrl) {
+  if (typeof bundleUrl !== "string" || bundleUrl.length === 0) return null;
+  let pathname;
+  try {
+    pathname = new URL(bundleUrl).pathname;
+  } catch {
+    return null;
+  }
+
+  const parts = pathname.split("/").filter(Boolean);
+  const downloadIndex = parts.indexOf("download");
+  const tag = downloadIndex >= 0 ? parts[downloadIndex + 1] : null;
+  const match = tag?.match(/^v(\d+\.\d+\.\d+)(?:-\d+)?$/);
+  return match ? `openclaw@${match[1]}` : null;
 }
 
 /**

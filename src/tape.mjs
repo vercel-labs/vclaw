@@ -73,6 +73,9 @@ const EMAILLIKE_KEY = /email/i;
 // Catches compound keys like `gitHubAuthToken`, `inviteCode`, `createdByUser`,
 // etc. without listing every one.
 const SENSITIVE_KEY = /(token|secret|password|apikey|credential|session|bearer|cookie)/i;
+const SENSITIVE_QUERY_PARAM = /(token|secret|password|apikey|credential|bearer|cookie|x-vercel-protection-bypass)/i;
+const SENSITIVE_HEADER = /^(authorization|cookie|set-cookie|x-vercel-protection-bypass)$/i;
+const SECRETLIKE_VALUE = /(bearer\s+)?[A-Za-z0-9._~+/-]{20,}={0,2}/g;
 
 function scrubJsonValue(node, parentKey) {
   if (node === null || node === undefined) return node;
@@ -108,19 +111,73 @@ function scrubBody(raw) {
   }
 }
 
+function scrubText(raw) {
+  if (typeof raw !== "string" || !raw) return raw;
+  return raw.replace(SECRETLIKE_VALUE, "***SCRUBBED***");
+}
+
+export function scrubUrl(raw) {
+  if (typeof raw !== "string" || !raw) return raw;
+  try {
+    const parsed = new URL(raw);
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (SENSITIVE_QUERY_PARAM.test(key)) {
+        parsed.searchParams.set(key, "***SCRUBBED***");
+      }
+    }
+    return parsed.toString();
+  } catch {
+    return raw.replace(
+      /([?&][^=&#]*(?:token|secret|password|apikey|credential|session|bearer|cookie|x-vercel-protection-bypass)[^=&#]*=)([^&#]*)/gi,
+      "$1***SCRUBBED***"
+    );
+  }
+}
+
+export function scrubTapeKey(kind, key) {
+  if (typeof key !== "string") return key;
+  if (kind === "fetch") {
+    const match = key.match(/^(\S+)\s+(.+)$/);
+    if (match) return `${match[1]} ${scrubUrl(match[2])}`;
+    return scrubUrl(key);
+  }
+  if (kind === "exec") return scrubText(key);
+  return key;
+}
+
+function scrubHeaders(headers) {
+  if (!headers || typeof headers !== "object") return headers;
+  const out = {};
+  for (const [key, value] of Object.entries(headers)) {
+    out[key] = SENSITIVE_HEADER.test(key) || SENSITIVE_KEY.test(key)
+      ? "***SCRUBBED***"
+      : scrubText(value);
+  }
+  return out;
+}
+
 function scrubEvent(event) {
+  const base = {
+    ...event,
+    key: scrubTapeKey(event.kind, event.key),
+  };
   if (event.kind === "fetch" && event.response) {
     return {
-      ...event,
-      response: { ...event.response, body: scrubBody(event.response.body) },
+      ...base,
+      response: {
+        ...event.response,
+        headers: scrubHeaders(event.response.headers),
+        body: scrubBody(event.response.body),
+      },
     };
   }
   if (event.kind === "exec" && event.response) {
     return {
-      ...event,
+      ...base,
       response: {
         ...event.response,
         stdout: scrubBody(event.response.stdout),
+        stderr: scrubBody(event.response.stderr),
       },
     };
   }
@@ -130,10 +187,10 @@ function scrubEvent(event) {
     const question = event.key || "";
     const looksSensitive = /secret|token|password/i.test(question);
     return looksSensitive
-      ? { ...event, response: "***SCRUBBED***" }
-      : event;
+      ? { ...base, response: "***SCRUBBED***" }
+      : base;
   }
-  return event;
+  return base;
 }
 
 export function scrubTapeFile(path) {

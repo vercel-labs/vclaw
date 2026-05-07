@@ -41,6 +41,8 @@ export async function runVerify(
     // accidentally print "complete" after a failed verification (the previous
     // contract returned `{ ok: false, ... }` and most callers ignored it).
     allowFailure = false,
+    retryAfterRepair = true,
+    retryAfterRepairDelayMs = isReplay() ? 0 : 2_000,
   } = {}
 ) {
   const base = url.replace(/\/+$/, "");
@@ -102,43 +104,20 @@ export async function runVerify(
   }
 
   // 3. Launch verification (safe mode by default)
-  const verifyLabel = `Running launch verification${destructive ? " (destructive)" : ""}`;
-  const verifySpin = spinner(`${verifyLabel} — 0s`);
-  const verifyStart = Date.now();
-  const verifyTick = setInterval(() => {
-    const s = Math.round((Date.now() - verifyStart) / 1000);
-    verifySpin.update(`${verifyLabel} — ${s}s${verifyHint(s)}`);
-  }, 500);
   const verifyEndpoint = `${base}/api/admin/launch-verify`;
+  let verifySpin = makeVerifySpinner(destructive);
   let verifyRes;
+  let raw;
+  let result;
   try {
-    verifyRes = await fetch(verifyEndpoint, {
-      method: "POST",
-      headers: {
-        ...authHeaders,
-        "Content-Type": "application/json",
-      },
-      // The route reads `body.mode`; sending `{ destructive: true }` was
-      // silently ignored, so wakeFromSleep / restorePrepared phases never ran.
-      body: JSON.stringify({ mode: destructive ? "destructive" : "safe" }),
-    });
+    ({ verifyRes, raw, result } = await postLaunchVerify({
+      verifyEndpoint,
+      authHeaders,
+      destructive,
+    }));
   } catch (err) {
     verifySpin.fail("Launch verification failed");
-    clearInterval(verifyTick);
     throw err;
-  }
-  clearInterval(verifyTick);
-
-  // Read body as text first — the endpoint can return 204/empty or an HTML
-  // error page. Calling res.json() directly crashes on either.
-  const raw = await verifyRes.text();
-  let result = null;
-  if (raw) {
-    try {
-      result = JSON.parse(raw);
-    } catch {
-      // fall through — surface the raw body below
-    }
   }
 
   if (!verifyRes.ok) {
@@ -178,6 +157,60 @@ export async function runVerify(
     return result;
   }
 
+  if (retryAfterRepair && shouldRetryAfterSandboxRepair(result)) {
+    verifySpin.fail("Launch verification repaired sandbox config after a failed chat probe");
+    warn("Retrying launch verification once now that the sandbox config was rewritten and restarted.");
+    await sleep(retryAfterRepairDelayMs);
+    verifySpin = makeVerifySpinner(destructive, { retry: true });
+    try {
+      ({ verifyRes, raw, result } = await postLaunchVerify({
+        verifyEndpoint,
+        authHeaders,
+        destructive,
+      }));
+    } catch (err) {
+      verifySpin.fail("Launch verification retry failed");
+      throw err;
+    }
+
+    if (!verifyRes.ok) {
+      verifySpin.fail(`Launch verification retry returned ${verifyRes.status}`);
+      const hint = describeVerifyFailure(verifyRes.status, raw, result);
+      if (hint) warn(hint);
+      if (raw) log(dim(truncate(raw, 800)));
+      else log(dim("(empty response body)"));
+      const failure = { ok: false, status: verifyRes.status, body: raw, hint };
+      if (!allowFailure) {
+        throw new VerifyFailedError(
+          `Launch verification returned HTTP ${verifyRes.status}.`,
+          failure
+        );
+      }
+      return failure;
+    }
+
+    if (result === null) {
+      verifySpin.fail(
+        "Launch verification retry returned a non-JSON response (empty or unexpected content)."
+      );
+      if (raw) log(dim(truncate(raw, 800)));
+      else log(dim("(empty response body)"));
+      const failure = { ok: false, status: verifyRes.status, body: raw };
+      if (!allowFailure) {
+        throw new VerifyFailedError(
+          "Launch verification returned a non-JSON response.",
+          failure
+        );
+      }
+      return failure;
+    }
+
+    if (result.ok) {
+      verifySpin.succeed("Launch verification passed after sandbox config repair");
+      return result;
+    }
+  }
+
   verifySpin.fail("Launch verification returned issues");
   log(dim(JSON.stringify(result, null, 2)));
   if (!allowFailure) {
@@ -187,6 +220,71 @@ export async function runVerify(
     );
   }
   return result;
+}
+
+function makeVerifySpinner(destructive, { retry = false } = {}) {
+  const verifyLabel = `${retry ? "Retrying" : "Running"} launch verification${destructive ? " (destructive)" : ""}`;
+  const verifySpin = spinner(`${verifyLabel} — 0s`);
+  const verifyStart = Date.now();
+  const verifyTick = setInterval(() => {
+    const s = Math.round((Date.now() - verifyStart) / 1000);
+    verifySpin.update(`${verifyLabel} — ${s}s${verifyHint(s)}`);
+  }, 500);
+  const originalFail = verifySpin.fail.bind(verifySpin);
+  const originalSucceed = verifySpin.succeed.bind(verifySpin);
+  verifySpin.fail = (message) => {
+    clearInterval(verifyTick);
+    return originalFail(message);
+  };
+  verifySpin.succeed = (message) => {
+    clearInterval(verifyTick);
+    return originalSucceed(message);
+  };
+  return verifySpin;
+}
+
+async function postLaunchVerify({ verifyEndpoint, authHeaders, destructive }) {
+  let verifyRes;
+  try {
+    verifyRes = await fetch(verifyEndpoint, {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "Content-Type": "application/json",
+      },
+      // The route reads `body.mode`; sending `{ destructive: true }` was
+      // silently ignored, so wakeFromSleep / restorePrepared phases never ran.
+      body: JSON.stringify({ mode: destructive ? "destructive" : "safe" }),
+    });
+  } catch (err) {
+    throw err;
+  }
+
+  // Read body as text first — the endpoint can return 204/empty or an HTML
+  // error page. Calling res.json() directly crashes on either.
+  const raw = await verifyRes.text();
+  let result = null;
+  if (raw) {
+    try {
+      result = JSON.parse(raw);
+    } catch {
+      // fall through — surface the raw body below
+    }
+  }
+  return { verifyRes, raw, result };
+}
+
+function shouldRetryAfterSandboxRepair(result) {
+  if (!result || result.ok) return false;
+  const failingPhase = result.channelReadiness?.failingPhaseId ||
+    result.phases?.find((phase) => phase.status === "fail")?.id;
+  return failingPhase === "chatCompletions" &&
+    result.sandboxHealth?.configReconciled === true &&
+    result.sandboxHealth?.configReconcileReason === "rewritten-and-restarted";
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function verifyHint(elapsed) {

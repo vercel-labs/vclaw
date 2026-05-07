@@ -136,8 +136,10 @@ export function evaluateSlackProvisioningOutcome({ slackExplicit, result, strict
         message:
           "Slack credentials are saved and auth.test passed, but delivery is still propagating " +
           "(liveConfigFresh/routeReady not yet true). Marking Slack as connected (delivery pending) " +
-          "and continuing — re-run `vclaw verify` in a minute, or set VCLAW_STRICT_SLACK_DELIVERY=1 " +
-          "to fail-closed instead." +
+          "and continuing — re-run `vclaw verify` in a minute. " +
+          "If a real Slack message stays stuck on \"Verifying config…\" for >2 min, " +
+          "run `vclaw doctor --url <deployment>` for sandbox state introspection. " +
+          "Set VCLAW_STRICT_SLACK_DELIVERY=1 to fail-closed instead." +
           formatSlackDiagnostics(result.diagnostics),
       };
     }

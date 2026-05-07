@@ -276,6 +276,10 @@ function buildAuthHeaders(adminSecret, bypassSecret) {
   return headers;
 }
 
+export function buildTuiSpawnArgs(spec, wssUrl, gatewayToken) {
+  return ["-y", "--package", spec, "--", "openclaw", "tui", "--url", wssUrl, "--token", gatewayToken];
+}
+
 function spawnTui(spec, wssUrl, gatewayToken) {
   return new Promise((resolve, reject) => {
     // Run npx from the OS temp dir so it ignores any project lockfile in the
@@ -284,7 +288,7 @@ function spawnTui(spec, wssUrl, gatewayToken) {
     // integrity hash different from the current registry entry.
     const child = nodeSpawn(
       "npx",
-      ["-y", "--package", spec, "--", "openclaw", "tui", "--url", wssUrl, "--token", gatewayToken],
+      buildTuiSpawnArgs(spec, wssUrl, gatewayToken),
       { stdio: "inherit", cwd: tmpdir() }
     );
     child.on("error", (err) => {

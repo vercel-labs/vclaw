@@ -212,6 +212,49 @@ test("runVerify resolves with the success body when launch-verify returns {ok:tr
   }
 });
 
+test("runVerify retries once after sandbox config repair fixes first chat probe", async () => {
+  const firstFailure = {
+    ok: false,
+    phases: [
+      { id: "preflight", status: "pass" },
+      { id: "queuePing", status: "pass" },
+      { id: "ensureRunning", status: "pass" },
+      { id: "chatCompletions", status: "fail", error: "gateway_retryable_500" },
+    ],
+    sandboxHealth: {
+      configReconciled: true,
+      configReconcileReason: "rewritten-and-restarted",
+    },
+  };
+  const stub = installFetchStub((url) => {
+    if (url.endsWith("/api/admin/preflight")) {
+      return jsonResponse(200, { ok: true, actions: [] });
+    }
+    if (url.endsWith("/api/admin/launch-verify")) {
+      const launchCalls = stub.calls.filter((c) =>
+        c.url.endsWith("/api/admin/launch-verify"),
+      );
+      return launchCalls.length === 1
+        ? jsonResponse(200, firstFailure)
+        : jsonResponse(200, { ok: true, summary: { passed: 4 } });
+    }
+    return jsonResponse(404, {});
+  });
+  try {
+    const result = await runVerify("https://example.com", "admin", {
+      retryAfterRepairDelayMs: 0,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.summary.passed, 4);
+    assert.equal(
+      stub.calls.filter((c) => c.url.endsWith("/api/admin/launch-verify")).length,
+      2,
+    );
+  } finally {
+    stub.restore();
+  }
+});
+
 test("runVerify posts {mode:'safe'} by default", async () => {
   const stub = installFetchStub((url) => {
     if (url.endsWith("/api/admin/preflight")) {

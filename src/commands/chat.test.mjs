@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseGatewayContext } from "./chat.mjs";
+import { buildTuiSpawnArgs, parseGatewayContext } from "./chat.mjs";
 
 const SAMPLE_CONTEXT = {
   sandboxOrigin: "https://oc-prj-abc.vercel.run",
@@ -43,4 +43,25 @@ test("parseGatewayContext throws when required fields are missing", () => {
 test("parseGatewayContext throws on invalid JSON", () => {
   const html = `<script>var CONTEXT = {not json};</script>`;
   assert.throws(() => parseGatewayContext(html), /Invalid gateway handoff JSON/);
+});
+
+test("buildTuiSpawnArgs passes openclaw spec and token as argv elements", () => {
+  const args = buildTuiSpawnArgs(
+    "openclaw@1.2.3",
+    "wss://sandbox.example/",
+    "gateway-token-value"
+  );
+
+  assert.deepEqual(args, [
+    "-y",
+    "--package",
+    "openclaw@1.2.3",
+    "--",
+    "openclaw",
+    "tui",
+    "--url",
+    "wss://sandbox.example/",
+    "--token",
+    "gateway-token-value",
+  ]);
 });

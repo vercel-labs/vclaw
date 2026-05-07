@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildManagedEnvVars,
+  deriveOpenclawPackageSpecFromBundleUrl,
   findManagedEnvIssues,
   waitForManagedEnvVars,
 } from "./env.mjs";
@@ -25,7 +26,8 @@ test("buildManagedEnvVars marks plain identity vars as plain and secrets as sens
     protectionBypassSecret: "bypass",
     projectScope: "team-slug",
     projectName: "vercel-openclaw",
-    bundleUrl: "https://x.public.blob.vercel-storage.com/openclaw.bundle.mjs",
+    bundleUrl:
+      "https://github.com/vercel-labs/openclaw-sandbox/releases/download/v2026.5.4-2/openclaw.bundle.mjs",
   });
   assert.equal(adminSecret, "given-admin");
   assert.equal(vars.ADMIN_SECRET.type, "sensitive");
@@ -34,10 +36,37 @@ test("buildManagedEnvVars marks plain identity vars as plain and secrets as sens
   assert.equal(vars.VCLAW_PROJECT_SCOPE.type, "plain");
   assert.equal(vars.VCLAW_PROJECT_NAME.type, "plain");
   assert.equal(vars.OPENCLAW_BUNDLE_URL.type, "plain");
+  assert.equal(vars.OPENCLAW_PACKAGE_SPEC.type, "plain");
+  assert.equal(vars.OPENCLAW_PACKAGE_SPEC.value, "openclaw@2026.5.4");
   assert.equal(
     vars.OPENCLAW_BUNDLE_UI_URL.value,
-    "https://x.public.blob.vercel-storage.com/control-ui.tar.gz"
+    "https://github.com/vercel-labs/openclaw-sandbox/releases/download/v2026.5.4-2/control-ui.tar.gz"
   );
+});
+
+test("deriveOpenclawPackageSpecFromBundleUrl pins package spec from release tag", () => {
+  assert.equal(
+    deriveOpenclawPackageSpecFromBundleUrl(
+      "https://github.com/vercel-labs/openclaw-sandbox/releases/download/v2026.5.4-2/openclaw.bundle.mjs",
+    ),
+    "openclaw@2026.5.4",
+  );
+  assert.equal(
+    deriveOpenclawPackageSpecFromBundleUrl(
+      "https://github.com/vercel-labs/openclaw-sandbox/releases/download/v2026.5.4/openclaw.bundle.mjs",
+    ),
+    "openclaw@2026.5.4",
+  );
+});
+
+test("deriveOpenclawPackageSpecFromBundleUrl ignores non-release bundle URLs", () => {
+  assert.equal(
+    deriveOpenclawPackageSpecFromBundleUrl(
+      "https://example.test/assets/openclaw.bundle.mjs",
+    ),
+    null,
+  );
+  assert.equal(deriveOpenclawPackageSpecFromBundleUrl("not a url"), null);
 });
 
 test("findManagedEnvIssues returns empty when every key is present and matches", () => {
