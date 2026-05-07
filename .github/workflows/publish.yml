@@ -49,7 +49,14 @@ jobs:
       - name: Upgrade npm to a trusted-publishing-compatible version
         # setup-node@v4 bundles an older npm; force-install the latest
         # so we're guaranteed to have the OIDC codepath.
-        run: npm install -g npm@latest
+        run: |
+          set -euo pipefail
+          npm_version="11.6.2"
+          tmp="$(mktemp -d)"
+          curl -fsSL "https://registry.npmjs.org/npm/-/npm-${npm_version}.tgz" -o "$tmp/npm.tgz"
+          tar -xzf "$tmp/npm.tgz" -C "$tmp"
+          echo "$tmp/package/bin" >> "$GITHUB_PATH"
+          node "$tmp/package/bin/npm-cli.js" --version
 
       - name: Verify tag matches package.json version
         if: github.event_name == 'push'
