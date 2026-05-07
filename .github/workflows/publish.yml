@@ -55,7 +55,7 @@ jobs:
           tmp="$(mktemp -d)"
           curl -fsSL "https://registry.npmjs.org/npm/-/npm-${npm_version}.tgz" -o "$tmp/npm.tgz"
           tar -xzf "$tmp/npm.tgz" -C "$tmp"
-          echo "$tmp/package/bin" >> "$GITHUB_PATH"
+          echo "NPM_CLI=$tmp/package/bin/npm-cli.js" >> "$GITHUB_ENV"
           node "$tmp/package/bin/npm-cli.js" --version
 
       - name: Verify tag matches package.json version
@@ -70,7 +70,7 @@ jobs:
           echo "Tag and package.json agree on $PKG"
 
       - name: Run tests
-        run: npm test
+        run: node "$NPM_CLI" test
 
       - name: Publish
         # `--provenance` produces a signed attestation linking this npm
@@ -78,4 +78,4 @@ jobs:
         # "Provenance"). Trusted publishing enables it by default, but
         # passing it explicitly means the publish fails loudly if OIDC
         # isn't actually configured rather than silently falling back.
-        run: npm publish --provenance --access public
+        run: node "$NPM_CLI" publish --provenance --access public
