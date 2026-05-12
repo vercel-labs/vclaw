@@ -8,6 +8,13 @@ import {
   replayEvent,
 } from "./tape.mjs";
 
+// On Windows, executables installed via npm/pnpm (vercel, gh, npx, ...) are
+// shim files like `vercel.cmd`. Plain spawn() can't find them without a shell,
+// so we enable shell mode for non-absolute commands on win32.
+const IS_WIN = process.platform === "win32";
+const isAbsolutePath = (cmd) => /^[a-zA-Z]:[\\/]|^[\\/]/.test(cmd);
+const shellFor = (cmd) => IS_WIN && !isAbsolutePath(cmd);
+
 /**
  * Run a command and return { stdout, stderr, code }.
  * Rejects only on spawn failure, not on non-zero exit.
@@ -26,6 +33,7 @@ export function exec(cmd, args = [], opts = {}) {
     const child = nodeSpawn(cmd, args, {
       cwd,
       env,
+      shell: shellFor(cmd),
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -108,6 +116,7 @@ export function spawn(cmd, args = [], opts = {}) {
   return new Promise((resolve, reject) => {
     const child = nodeSpawn(cmd, args, {
       stdio: "inherit",
+      shell: shellFor(cmd),
       ...opts,
     });
     child.on("error", reject);

@@ -10,16 +10,26 @@ const API = "https://api.vercel.com";
 // ~/Library/Application Support/com.vercel.cli to the XDG path
 // (~/.local/share/com.vercel.cli), so we check the XDG path first on every
 // platform and keep the platform-specific legacy path as a fallback.
+//
+// On Windows, Vercel CLI 50+ stores files inside a `Data` subdir
+// (e.g. %APPDATA%\com.vercel.cli\Data\auth.json) — the Tauri app-local-data
+// layout. We probe both the base and its `Data` child on every platform so a
+// future layout change anywhere is handled transparently.
 function vercelCliDirs() {
-  const dirs = [];
+  const bases = [];
   const xdg = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
-  dirs.push(join(xdg, "com.vercel.cli"));
+  bases.push(join(xdg, "com.vercel.cli"));
   if (platform() === "darwin") {
-    dirs.push(
+    bases.push(
       join(homedir(), "Library", "Application Support", "com.vercel.cli"),
     );
   } else if (platform() === "win32" && process.env.APPDATA) {
-    dirs.push(join(process.env.APPDATA, "com.vercel.cli"));
+    bases.push(join(process.env.APPDATA, "com.vercel.cli"));
+  }
+  const dirs = [];
+  for (const base of bases) {
+    dirs.push(base);
+    dirs.push(join(base, "Data"));
   }
   return dirs;
 }
