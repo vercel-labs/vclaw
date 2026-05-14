@@ -40,6 +40,7 @@ const usage = `
     --config-token <token>
     --refresh-token <token>
     --app-name <name>          Optional display_information.name override
+    --bot-name <name>          Optional bot_user.display_name override for create
 
   Telegram / Discord options:
     --bot-token <token>
@@ -86,6 +87,7 @@ export async function add(argv) {
       "config-token": { type: "string" },
       "refresh-token": { type: "string" },
       "app-name": { type: "string" },
+      "bot-name": { type: "string" },
       // Discord
       "auto-configure-endpoint": { type: "boolean" },
       "auto-register-command": { type: "boolean" },
@@ -151,6 +153,7 @@ async function addSlack(ctx, values) {
     configToken: values["config-token"] || null,
     refreshToken: values["refresh-token"] || null,
     appName: values["app-name"] || null,
+    botName: values["bot-name"] || null,
     protectionBypassSecret: ctx.protectionBypassSecret || undefined,
   });
 

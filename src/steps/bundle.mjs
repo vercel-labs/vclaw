@@ -1,58 +1,32 @@
 import { exec } from "../shell.mjs";
 import { dim, success, warn } from "../ui.mjs";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
 
-export const DEFAULT_OPENCLAW_REPO_DIR = "~/dev/openclaw";
+export const OFFICIAL_OPENCLAW_BUNDLE_REPO = "vercel-labs/openclaw";
 export const BUNDLE_ASSET_NAME = "openclaw.bundle.mjs";
-export const REQUIRED_BUNDLE_ASSETS = [
+export const OPENCLAW_BUNDLE_COMPATIBILITY_ERROR_CODE =
+  "OPENCLAW_BUNDLE_COMPATIBILITY_MISMATCH";
+export const REQUIRED_RUNTIME_BUNDLE_ASSETS = [
   BUNDLE_ASSET_NAME,
   "channel-catalog.json",
   "workspace-templates.tar.gz",
   "channels.tar.gz",
   "bundle-deps.tar.gz",
   "bundle-openclaw-pkg.tar.gz",
-  "channel-shared-chunks.tar.gz",
   "control-ui.tar.gz",
 ];
-
-function expandHome(path) {
-  if (!path || path === "~") return homedir();
-  if (path.startsWith("~/")) return resolve(homedir(), path.slice(2));
-  return resolve(path);
-}
-
-export function githubRepoFromRemoteUrl(url) {
-  if (typeof url !== "string" || !url.trim()) return null;
-  const raw = url.trim();
-
-  const ssh = raw.match(/^(?:[^@/:]+@)?github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/i);
-  if (ssh) return `${ssh[1]}/${ssh[2]}`;
-
-  try {
-    const parsed = new URL(raw);
-    if (parsed.hostname.toLowerCase() !== "github.com") return null;
-    const parts = parsed.pathname.replace(/^\/+|\/+$/g, "").split("/");
-    if (parts.length < 2) return null;
-    return `${parts[0]}/${parts[1].replace(/\.git$/i, "")}`;
-  } catch {
-    return null;
-  }
-}
-
-async function readGithubRemotes(repoDir) {
-  const result = await exec("git", ["remote", "-v"], { cwd: repoDir });
-  if (result.code !== 0) {
-    throw new Error(result.stderr || result.stdout || `git remote -v failed in ${repoDir}`);
-  }
-  const repos = new Set();
-  for (const line of result.stdout.split(/\r?\n/)) {
-    const [, url] = line.trim().split(/\s+/);
-    const repo = githubRepoFromRemoteUrl(url);
-    if (repo) repos.add(repo);
-  }
-  return [...repos];
-}
+export const REQUIRED_BUNDLE_METADATA_ASSETS = [
+  "asset-manifest.json",
+  "bundle-contract.json",
+  "release.json",
+  "checksums.sha256",
+];
+export const REQUIRED_MANIFEST_RECORDED_ASSETS = [
+  ...REQUIRED_RUNTIME_BUNDLE_ASSETS,
+  "bundle-contract.json",
+  "release.json",
+];
+export const OPTIONAL_BUNDLE_ASSETS = ["channel-shared-chunks.tar.gz"];
+export const REQUIRED_BUNDLE_ASSETS = REQUIRED_RUNTIME_BUNDLE_ASSETS;
 
 async function fetchJson(url) {
   let token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
@@ -78,6 +52,69 @@ async function fetchJson(url) {
   return res.json();
 }
 
+function issue(reason, detail) {
+  return { code: OPENCLAW_BUNDLE_COMPATIBILITY_ERROR_CODE, reason, detail };
+}
+
+function isObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export function validateAssetManifestForBundleResolver(manifest, availableAssetNames = []) {
+  if (!isObject(manifest)) {
+    return { ok: false, issue: issue("invalid-json", "asset-manifest.json must be an object") };
+  }
+  if (manifest.schemaVersion !== 1) {
+    return {
+      ok: false,
+      issue: issue("schema-version", "asset-manifest.json schemaVersion must be 1"),
+    };
+  }
+  if (manifest.name !== "openclaw-sandbox-bundle" || manifest.profile !== "sandbox") {
+    return {
+      ok: false,
+      issue: issue("name-profile", "asset-manifest.json must describe the sandbox bundle"),
+    };
+  }
+  if (!isObject(manifest.assets)) {
+    return { ok: false, issue: issue("assets-missing", "asset-manifest.json lacks assets") };
+  }
+
+  const availableAssets = new Set(availableAssetNames);
+  for (const assetName of [...REQUIRED_RUNTIME_BUNDLE_ASSETS, ...REQUIRED_BUNDLE_METADATA_ASSETS]) {
+    if (availableAssets.size > 0 && !availableAssets.has(assetName)) {
+      return {
+        ok: false,
+        issue: issue("required-asset-missing", `GitHub release lacks ${assetName}`),
+      };
+    }
+  }
+
+  for (const assetName of REQUIRED_MANIFEST_RECORDED_ASSETS) {
+    const record = manifest.assets[assetName];
+    if (!isObject(record)) {
+      return {
+        ok: false,
+        issue: issue("required-asset-missing", `asset-manifest.json lacks assets.${assetName}`),
+      };
+    }
+    if (typeof record.bytes !== "number" || record.bytes <= 0 || typeof record.sha256 !== "string") {
+      return {
+        ok: false,
+        issue: issue("asset-record-invalid", `asset-manifest.json has invalid record for ${assetName}`),
+      };
+    }
+  }
+
+  const warnings = [];
+  for (const assetName of OPTIONAL_BUNDLE_ASSETS) {
+    if (!manifest.assets[assetName]) {
+      warnings.push({ reason: "optional-asset-missing", detail: `${assetName} is absent` });
+    }
+  }
+  return { ok: true, warnings };
+}
+
 export function selectLatestCompatibleBundleRelease({ repo, releases }) {
   if (!Array.isArray(releases)) return null;
 
@@ -89,7 +126,26 @@ export function selectLatestCompatibleBundleRelease({ repo, releases }) {
         .filter((a) => a?.name && a?.browser_download_url)
         .map((a) => [a.name, a]),
     );
-    const missingAssets = REQUIRED_BUNDLE_ASSETS.filter((name) => !assetByName.has(name));
+    const manifestAsset = assetByName.get("asset-manifest.json");
+    if (manifestAsset) {
+      const manifestResult = validateAssetManifestForBundleResolver(
+        manifestAsset.content,
+        [...assetByName.keys()],
+      );
+      if (!manifestResult.ok) continue;
+      const asset = assetByName.get(BUNDLE_ASSET_NAME);
+      return {
+        repo,
+        tag: release.tag_name,
+        publishedAt: release.published_at || release.created_at || "",
+        url: asset.browser_download_url,
+        assetNames: [...assetByName.keys()].sort((a, b) => a.localeCompare(b)),
+        compatibilitySource: "asset-manifest",
+        compatibilityWarnings: manifestResult.warnings ?? [],
+      };
+    }
+
+    const missingAssets = REQUIRED_RUNTIME_BUNDLE_ASSETS.filter((name) => !assetByName.has(name));
     if (missingAssets.length > 0) continue;
     const asset = assetByName.get(BUNDLE_ASSET_NAME);
     return {
@@ -98,6 +154,13 @@ export function selectLatestCompatibleBundleRelease({ repo, releases }) {
       publishedAt: release.published_at || release.created_at || "",
       url: asset.browser_download_url,
       assetNames: [...assetByName.keys()].sort((a, b) => a.localeCompare(b)),
+      compatibilitySource: "legacy-asset-list",
+      compatibilityWarnings: [
+        {
+          reason: "manifest-missing",
+          detail: "asset-manifest.json is absent; using legacy bundle compatibility checklist",
+        },
+      ],
     };
   }
   return null;
@@ -107,47 +170,39 @@ async function latestBundleReleaseForRepo(repo) {
   const releases = await fetchJson(
     `https://api.github.com/repos/${repo}/releases?per_page=30`,
   );
+  if (Array.isArray(releases)) {
+    for (const release of releases) {
+      const assets = Array.isArray(release?.assets) ? release.assets : [];
+      const manifestAsset = assets.find((asset) => asset?.name === "asset-manifest.json");
+      if (!manifestAsset?.browser_download_url) continue;
+      try {
+        manifestAsset.content = await fetchJson(manifestAsset.browser_download_url);
+      } catch (err) {
+        manifestAsset.content = {
+          schemaVersion: "invalid-fetch",
+          __fetchError: err.message,
+        };
+      }
+    }
+  }
   return selectLatestCompatibleBundleRelease({ repo, releases });
 }
 
 export async function resolveLatestPublishedBundleUrl({
-  openclawDir = process.env.OPENCLAW_REPO_DIR || DEFAULT_OPENCLAW_REPO_DIR,
+  repo = OFFICIAL_OPENCLAW_BUNDLE_REPO,
   onWarn = warn,
 } = {}) {
-  const repoDir = expandHome(openclawDir);
-  const repos = await readGithubRemotes(repoDir);
-  if (repos.length === 0) {
-    throw new Error(`No GitHub remotes found in ${repoDir}.`);
-  }
-
-  const candidates = [];
-  const errors = [];
-  for (const repo of repos) {
-    try {
-      const candidate = await latestBundleReleaseForRepo(repo);
-      if (candidate) candidates.push(candidate);
-    } catch (err) {
-      errors.push(`${repo}: ${err.message}`);
-    }
-  }
-
-  if (candidates.length === 0) {
-    if (errors.length > 0 && onWarn) {
-      onWarn(`Could not inspect some OpenClaw remotes: ${errors.join("; ")}`);
-    }
+  const candidate = await latestBundleReleaseForRepo(repo);
+  if (!candidate) {
     throw new Error(
-      `No compatible published OpenClaw bundle release found on GitHub remotes from ${repoDir}. ` +
-        `Checked remotes: ${repos.join(", ")}. ` +
-        `Required assets: ${REQUIRED_BUNDLE_ASSETS.join(", ")}.`,
+        `No compatible published OpenClaw bundle release found in official GitHub repo ${repo}. ` +
+        `Required assets: ${REQUIRED_RUNTIME_BUNDLE_ASSETS.join(", ")}.`,
     );
   }
-
-  candidates.sort((a, b) => {
-    const byTime = Date.parse(b.publishedAt || 0) - Date.parse(a.publishedAt || 0);
-    if (byTime) return byTime;
-    return a.repo.localeCompare(b.repo);
-  });
-  return candidates[0];
+  for (const warning of candidate.compatibilityWarnings ?? []) {
+    onWarn?.(`OpenClaw bundle ${candidate.tag} from ${repo}: ${warning.detail}`);
+  }
+  return candidate;
 }
 
 export async function resolveCreateBundleUrl({ explicitUrl, skipDefault = false } = {}) {

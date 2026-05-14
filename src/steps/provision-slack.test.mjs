@@ -154,6 +154,7 @@ test("provisionSlack: explicit configToken selects create branch, calls POST /ap
       configToken: "xoxe.xoxp-abc",
       refreshToken: "xoxe-1-def",
       appName: "My Custom Bot",
+      botName: "custom-bot",
       pollTimeoutMs: 5_000,
       // The create-branch readiness gate now requires TWO consecutive
       // delivery-ready reads (same as connect-branch). Use a tight
@@ -181,6 +182,7 @@ test("provisionSlack: explicit configToken selects create branch, calls POST /ap
     assert.equal(body.configToken, "xoxe.xoxp-abc");
     assert.equal(body.refreshToken, "xoxe-1-def");
     assert.equal(body.appName, "My Custom Bot");
+    assert.equal(body.botName, "custom-bot");
   } finally {
     stub.restore();
   }

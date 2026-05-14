@@ -79,6 +79,8 @@ npx @vercel/vclaw create --skip-deploy
 
 ```text
 --name <name>                      Vercel project name (default: openclaw)
+--auto-project-name                Use the next available friendly OpenClaw project name without prompting
+--auto-link                        Write local .env.local/.gitignore for debugging the linked app
 --scope <scope>                    Vercel team scope
 --dir <path>                       Use an existing local vercel-openclaw project directory
 --clone                            Clone/update vercel-openclaw into --dir or managed workspace
@@ -92,6 +94,7 @@ npx @vercel/vclaw create --skip-deploy
 --telegram <botToken>              Wire a Telegram bot after verify
 --slack <botToken>                 Wire a Slack bot (requires --slack-signing-secret)
 --slack-signing-secret <secret>    Slack signing secret (paired with --slack)
+--slack-bot-name <name>             Bot display name when creating a Slack app
 --yes                              Skip confirmation prompts where possible
 ```
 

@@ -10,7 +10,7 @@ import {
   resolveManagedWorkspace,
   writeManagedWorkspaceMetadata,
 } from "../steps/workspace.mjs";
-import { buildManagedEnvVars, pushEnvVars, readLinkedProject } from "../steps/env.mjs";
+import { buildManagedEnvVars, pushEnvVars, readLinkedProject, writeLocalDebugEnv } from "../steps/env.mjs";
 import {
   deploy,
   pickVerifyTargetForDeployment,
@@ -27,6 +27,7 @@ import { validateProjectName } from "../vercel.mjs";
 import {
   ensureAutomationBypassSecret,
   findAvailableProjectName,
+  findAvailableFriendlyProjectName,
   getDeployment,
   getProductionAlias,
   getProject,
@@ -38,7 +39,7 @@ import {
   setActiveTeam,
 } from "../vercel-api.mjs";
 import { isReplay } from "../tape.mjs";
-import { isInteractive, log, prompt, promptMasked, step, success, warn } from "../ui.mjs";
+import { dim, isInteractive, log, prompt, promptMasked, step, success, warn } from "../ui.mjs";
 import { registerClaw, suggestClawName, validateClawName } from "../registry.mjs";
 
 const DEFAULT_NAME = "vercel-openclaw";
@@ -281,6 +282,7 @@ export function createDefaultDeps() {
     getUser,
     setActiveTeam,
     findAvailableProjectName,
+    findAvailableFriendlyProjectName,
     cloneRepo,
     linkProject,
     provisionRedis,
@@ -290,6 +292,7 @@ export function createDefaultDeps() {
     ensureAutomationBypassSecret,
     resolveCreateBundleUrl,
     pushEnvVars,
+    writeLocalDebugEnv,
     deploy,
     readLinkedProject,
     waitForDeploymentReady,
@@ -309,6 +312,8 @@ export async function create(argv, deps = createDefaultDeps()) {
     args: argv,
     options: {
       name: { type: "string" },
+      "auto-project-name": { type: "boolean", default: false },
+      "auto-link": { type: "boolean", default: false },
       "claw-name": { type: "string" },
       scope: { type: "string" },
       team: { type: "string" },
@@ -325,6 +330,7 @@ export async function create(argv, deps = createDefaultDeps()) {
       "slack-config-token": { type: "string" },
       "slack-refresh-token": { type: "string" },
       "slack-app-name": { type: "string" },
+      "slack-bot-name": { type: "string" },
       "slack-skip": { type: "boolean", default: false },
       "bundle-url": { type: "string" },
       "no-bundle": { type: "boolean", default: false },
@@ -350,6 +356,7 @@ export async function create(argv, deps = createDefaultDeps()) {
     values["slack-config-token"] !== undefined ||
     values["slack-refresh-token"] !== undefined ||
     values["slack-app-name"] !== undefined ||
+    values["slack-bot-name"] !== undefined ||
     values["slack-signing-secret"] !== undefined ||
     values["slack-skip"];
   if (slackRequested && values["skip-deploy"]) {
@@ -362,6 +369,10 @@ export async function create(argv, deps = createDefaultDeps()) {
   const slackConfigToken = values["slack-config-token"]?.trim();
   const slackRefreshToken = values["slack-refresh-token"]?.trim();
   const slackAppName = values["slack-app-name"]?.trim();
+  const slackBotName = values["slack-bot-name"]?.trim();
+  if (values["slack-bot-name"] !== undefined && !slackBotName) {
+    throw new Error("--slack-bot-name value cannot be empty.");
+  }
   if (values["slack-signing-secret"] !== undefined && !slackSigningSecret) {
     throw new Error("--slack-signing-secret value cannot be empty.");
   }
@@ -386,7 +397,12 @@ export async function create(argv, deps = createDefaultDeps()) {
       "--slack-config-token creates a new app; --slack-bot-token connects an existing one. Pick one.",
     );
   }
-  if (values["slack-skip"] && (slackConfigToken || slackBotToken || slackRefreshToken || slackAppName)) {
+  if (slackBotName && slackBotToken) {
+    throw new Error(
+      "--slack-bot-name only applies when creating a new Slack app with --slack-config-token or interactive create.",
+    );
+  }
+  if (values["slack-skip"] && (slackConfigToken || slackBotToken || slackRefreshToken || slackAppName || slackBotName)) {
     throw new Error(
       "--slack-skip cannot be combined with other --slack-* flags.",
     );
@@ -480,6 +496,9 @@ export async function create(argv, deps = createDefaultDeps()) {
 
   // 4. Resolve Vercel project name (prompt if default is taken)
   let name = values.name;
+  if (name && values["auto-project-name"]) {
+    throw new Error("Pass only one of --name or --auto-project-name.");
+  }
   if (name) {
     const nameError = validateProjectName(name);
     if (nameError) {
@@ -493,22 +512,30 @@ export async function create(argv, deps = createDefaultDeps()) {
       // Faster than paginating every project in the team (thousands of
       // projects in vercel-labs) just to check one name.
       if (token) {
-        const { name: picked, baseTaken } = await deps.findAvailableProjectName(
-          token,
-          DEFAULT_NAME,
-          pickedTeamId
-        );
-        suggested = picked;
-        if (baseTaken && canPrompt) {
-          warn(
-            `A Vercel project named "${DEFAULT_NAME}" already exists in ${activeSlug || "this scope"} — suggesting "${suggested}".`
+        if (values["auto-project-name"]) {
+          const { name: picked } = await deps.findAvailableFriendlyProjectName(
+            token,
+            pickedTeamId
           );
+          suggested = picked;
+        } else {
+          const { name: picked, baseTaken } = await deps.findAvailableProjectName(
+            token,
+            DEFAULT_NAME,
+            pickedTeamId
+          );
+          suggested = picked;
+          if (baseTaken && canPrompt) {
+            warn(
+              `A Vercel project named "${DEFAULT_NAME}" already exists in ${activeSlug || "this scope"} — suggesting "${suggested}".`
+            );
+          }
         }
       }
     } catch {
       // ignore — fall back to default and let prompts/link surface issues
     }
-    if (canPrompt) {
+    if (canPrompt && !values["auto-project-name"]) {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const answer = await prompt("Vercel project name?", suggested);
         const err = validateProjectName(answer);
@@ -525,6 +552,9 @@ export async function create(argv, deps = createDefaultDeps()) {
       }
     } else {
       name = suggested;
+      if (values["auto-project-name"] && suggested !== DEFAULT_NAME) {
+        success(`Using available Vercel project name: ${suggested}`);
+      }
     }
   }
 
@@ -672,6 +702,16 @@ export async function create(argv, deps = createDefaultDeps()) {
     bundleUrl,
   });
   await deps.pushEnvVars(projectDir, vars);
+
+  if (values["auto-link"]) {
+    const localEnv = deps.writeLocalDebugEnv(projectDir, vars);
+    success(
+      "Wrote local debug env: " +
+        localEnv.envPath +
+        " " +
+        dim("(" + localEnv.keys.join(", ") + ")")
+    );
+  }
 
   if (managedWorkspace) {
     deps.writeManagedWorkspaceMetadata(managedWorkspace, {
@@ -841,6 +881,7 @@ export async function create(argv, deps = createDefaultDeps()) {
         configToken: slackConfigToken,
         refreshToken: slackRefreshToken,
         appName: slackAppName,
+        botName: slackBotName,
         botToken: slackBotToken,
         signingSecret: slackSigningSecret,
         protectionBypassSecret,

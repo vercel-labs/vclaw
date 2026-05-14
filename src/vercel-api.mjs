@@ -79,7 +79,14 @@ export function readVercelTokenWithSource() {
   return { token: null, source: "none", path: null };
 }
 
+export let apiForTesting = null;
+
+export function _setApiForTesting(fn) {
+  apiForTesting = fn;
+}
+
 async function api(token, path, init = {}) {
+  if (apiForTesting) return apiForTesting(token, path, init);
   const method = init.method || "GET";
   const startedAt = Date.now();
   debug(`api ${method} ${path}`, init.body ? { body: init.body } : undefined);
@@ -187,19 +194,100 @@ export async function updateProject(token, projectId, teamId, patch) {
 
 /**
  * Probe project names one at a time via GET /v9/projects/{name} (404 = free).
- * Much faster than paginating `listProjects` in scopes with thousands of
- * projects, which is ~15 sequential API calls. Returns the first free name
- * and whether the base was taken (for warning messaging).
+ * If the low numeric range is saturated, page project names once and pick the
+ * next numeric suffix instead of falling back to an opaque timestamp.
  */
 export async function findAvailableProjectName(token, base, teamId, { maxAttempts = 50 } = {}) {
   const first = await getProject(token, base, teamId);
   if (!first) return { name: base, baseTaken: false };
   for (let i = 2; i < 2 + maxAttempts; i += 1) {
-    const candidate = `${base}-${i}`;
+    const candidate = base + "-" + i;
     const hit = await getProject(token, candidate, teamId);
     if (!hit) return { name: candidate, baseTaken: true };
   }
-  return { name: `${base}-${Date.now()}`, baseTaken: true };
+
+  const names = await listProjects(token, { teamId });
+  const prefix = base + "-";
+  let maxSuffix = 1;
+  for (const name of names) {
+    if (name === base) {
+      maxSuffix = Math.max(maxSuffix, 1);
+      continue;
+    }
+    if (!name.startsWith(prefix)) continue;
+    const suffix = name.slice(prefix.length);
+    if (!/^\d+$/.test(suffix)) continue;
+    maxSuffix = Math.max(maxSuffix, Number.parseInt(suffix, 10));
+  }
+  return { name: base + "-" + (maxSuffix + 1), baseTaken: true };
+}
+
+const FRIENDLY_PROJECT_ADJECTIVES = [
+  "bright",
+  "calm",
+  "clear",
+  "clever",
+  "cosmic",
+  "fresh",
+  "golden",
+  "kind",
+  "lively",
+  "lucky",
+  "neon",
+  "nimble",
+  "quiet",
+  "rapid",
+  "silver",
+  "steady",
+];
+
+const FRIENDLY_PROJECT_NOUNS = [
+  "anchor",
+  "beacon",
+  "bridge",
+  "canvas",
+  "comet",
+  "forge",
+  "harbor",
+  "signal",
+  "spark",
+  "studio",
+  "tower",
+  "trail",
+  "vector",
+  "vista",
+  "wave",
+  "workshop",
+];
+
+function friendlyProjectCandidate(index) {
+  const adjective = FRIENDLY_PROJECT_ADJECTIVES[
+    index % FRIENDLY_PROJECT_ADJECTIVES.length
+  ];
+  const noun = FRIENDLY_PROJECT_NOUNS[
+    Math.floor(index / FRIENDLY_PROJECT_ADJECTIVES.length) %
+      FRIENDLY_PROJECT_NOUNS.length
+  ];
+  const cycle = Math.floor(
+    index /
+      (FRIENDLY_PROJECT_ADJECTIVES.length * FRIENDLY_PROJECT_NOUNS.length),
+  );
+  return cycle === 0
+    ? `openclaw-${adjective}-${noun}`
+    : `openclaw-${adjective}-${noun}-${cycle + 1}`;
+}
+
+export async function findAvailableFriendlyProjectName(
+  token,
+  teamId,
+  { maxAttempts = 256 } = {},
+) {
+  for (let i = 0; i < maxAttempts; i += 1) {
+    const candidate = friendlyProjectCandidate(i);
+    const hit = await getProject(token, candidate, teamId);
+    if (!hit) return { name: candidate, baseTaken: false };
+  }
+  return findAvailableProjectName(token, "openclaw", teamId);
 }
 
 export async function listProjects(token, { teamId, ownerId } = {}) {

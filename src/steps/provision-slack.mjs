@@ -46,6 +46,7 @@ export async function provisionSlack(
     configToken: configTokenInput,
     refreshToken: refreshTokenInput,
     appName: appNameInput,
+    botName: botNameInput,
     botToken,
     signingSecret,
     protectionBypassSecret,
@@ -69,6 +70,7 @@ export async function provisionSlack(
     hasConfigToken: Boolean(configTokenInput),
     hasRefreshToken: Boolean(refreshTokenInput),
     appName: appNameInput || null,
+    botName: botNameInput || null,
     hasBotToken: Boolean(botToken),
     hasSigningSecret: Boolean(signingSecret),
     hasProtectionBypass: Boolean(protectionBypassSecret),
@@ -178,11 +180,13 @@ export async function provisionSlack(
   }
 
   const appName = (appNameInput ?? "").trim();
+  const botName = (botNameInput ?? "").trim();
 
   const created = await createSlackApp(url, adminSecret, {
     configToken,
     refreshToken: refreshToken || undefined,
     appName: appName || undefined,
+    botName: botName || undefined,
     protectionBypassSecret,
   });
 

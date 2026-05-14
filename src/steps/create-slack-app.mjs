@@ -13,7 +13,7 @@ const RETRY_BASE_MS = 2_000;
  * starts the OAuth install flow without requiring an admin cookie.
  *
  * Request body:
- *   { configToken, refreshToken?, appName? }
+ *   { configToken, refreshToken?, appName?, botName? }
  *
  * Response (success):
  *   { appId, appName, installUrl, installToken, oauthAuthorizeUrl, credentialsSource, tokenRotated }
@@ -21,7 +21,8 @@ const RETRY_BASE_MS = 2_000;
  * Bot handle and the slash command are derived from the owning Vercel
  * project (VCLAW_PROJECT_SCOPE / VCLAW_PROJECT_NAME env vars on the
  * deployment) so multiple projects can coexist in one Slack workspace. The
- * optional `appName` overrides only the human-facing display_information.name.
+ * optional `appName` overrides the human-facing display_information.name;
+ * optional `botName` overrides features.bot_user.display_name.
  *
  * Returns `{ ok, status, body }`. Never throws on HTTP errors.
  */
@@ -32,6 +33,7 @@ export async function createSlackApp(
     configToken,
     refreshToken,
     appName,
+    botName,
     protectionBypassSecret,
     sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
   } = {},
@@ -50,6 +52,7 @@ export async function createSlackApp(
     configToken,
     refreshToken: refreshToken || undefined,
     appName: appName || undefined,
+    botName: botName || undefined,
   };
 
   const spin = spinner("Creating Slack app via apps.manifest.create");

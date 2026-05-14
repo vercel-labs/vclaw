@@ -1,6 +1,6 @@
 {
   "name": "@vercel/vclaw",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "CLI to set up and deploy vercel-openclaw with one command",
   "type": "module",
   "files": [
@@ -41,7 +41,7 @@
     "vclaw": "bin/vclaw.mjs"
   },
   "scripts": {
-    "test": "node --test src/*.test.mjs src/**/*.test.mjs",
+    "test": "node --test --test-isolation=none src/*.test.mjs src/**/*.test.mjs",
     "preversion": "node scripts/preversion.mjs",
     "postversion": "git push --follow-tags origin HEAD"
   },

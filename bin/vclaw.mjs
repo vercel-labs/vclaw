@@ -23,6 +23,8 @@ const usage = `
 
   Create options:
     --name <name>            Vercel project name (prompted; default: vercel-openclaw)
+    --auto-project-name      Use the next available friendly OpenClaw project name without prompting
+    --auto-link              Write local .env.local/.gitignore for debugging the linked app
     --claw-name <name>       Friendly alias for this claw (prompted; e.g. "builder_bot")
     --scope <scope>          Vercel team scope
     --team <slug>            Deprecated alias for --scope
@@ -33,6 +35,7 @@ const usage = `
                               Optional Vercel deployment protection mode
     --protection-bypass-secret <secret>
                               Optional automation bypass secret (generated when protection is enabled)
+    --slack-bot-name <name>  Bot display name when creating a Slack app
     --bundle-url <url>       Use a specific pre-built OpenClaw bundle URL
     --no-bundle              Do not auto-use the latest published OpenClaw bundle
     --clone                  Clone/update vercel-openclaw into --dir or the managed workspace

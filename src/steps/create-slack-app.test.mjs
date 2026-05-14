@@ -24,7 +24,7 @@ function jsonResponse(status, payload) {
   });
 }
 
-test("createSlackApp POSTs to /api/channels/slack/app with bearer auth + config token + optional appName override", async () => {
+test("createSlackApp POSTs to /api/channels/slack/app with bearer auth + config token + optional appName/botName overrides", async () => {
   const stub = installFetchStub(() =>
     jsonResponse(200, {
       appId: "A123",
@@ -44,6 +44,7 @@ test("createSlackApp POSTs to /api/channels/slack/app with bearer auth + config 
         configToken: "xoxe.xoxp-abc",
         refreshToken: "xoxe-1-def",
         appName: "My Custom Bot",
+        botName: "custom-bot",
       },
     );
     assert.equal(res.ok, true);
@@ -58,13 +59,14 @@ test("createSlackApp POSTs to /api/channels/slack/app with bearer auth + config 
       configToken: "xoxe.xoxp-abc",
       refreshToken: "xoxe-1-def",
       appName: "My Custom Bot",
+      botName: "custom-bot",
     });
   } finally {
     stub.restore();
   }
 });
 
-test("createSlackApp omits undefined refresh token and appName from body (server derives display name from env)", async () => {
+test("createSlackApp omits undefined refresh token, appName, and botName from body (server derives names from env)", async () => {
   const stub = installFetchStub(() =>
     jsonResponse(200, { appId: "A1", appName: "X", installUrl: "https://x/y" }),
   );
@@ -74,6 +76,7 @@ test("createSlackApp omits undefined refresh token and appName from body (server
     assert.equal(body.configToken, "xoxe.xoxp-abc");
     assert.ok(!("refreshToken" in body) || body.refreshToken === undefined);
     assert.ok(!("appName" in body) || body.appName === undefined);
+    assert.ok(!("botName" in body) || body.botName === undefined);
   } finally {
     stub.restore();
   }

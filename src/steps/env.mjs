@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { debug } from "../debug.mjs";
 import { isReplay } from "../tape.mjs";
@@ -334,6 +334,33 @@ export async function waitForManagedEnvVars({
     await sleep(intervalMs);
   }
   return { ready: false, attempts: attempt, issues: lastIssues };
+}
+
+export function writeLocalDebugEnv(projectDir, vars, { filename = ".env.local" } = {}) {
+  const entries = Object.entries(vars || {})
+    .map(([key, entry]) => [key, typeof entry === "string" ? entry : entry?.value])
+    .filter(([, value]) => typeof value === "string" && value.length > 0);
+  const lines = [
+    "# Created by vclaw create --auto-link for local debugging.",
+    "# Do not commit this file.",
+    ...entries.map(([key, value]) => key + "=" + JSON.stringify(value)),
+    "",
+  ];
+  const envPath = join(projectDir, filename);
+  writeFileSync(envPath, lines.join("\n"), "utf8");
+
+  const gitignorePath = join(projectDir, ".gitignore");
+  const existing = existsSync(gitignorePath)
+    ? readFileSync(gitignorePath, "utf8")
+    : "";
+  const existingLines = new Set(existing.split(/\r?\n/));
+  const required = [filename, ".vercel"];
+  const missing = required.filter((line) => !existingLines.has(line));
+  if (missing.length > 0) {
+    const prefix = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+    appendFileSync(gitignorePath, prefix + missing.join("\n") + "\n", "utf8");
+  }
+  return { envPath, gitignorePath, keys: entries.map(([key]) => key) };
 }
 
 export async function pushEnvVars(

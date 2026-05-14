@@ -1,10 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildManagedEnvVars,
   deriveOpenclawPackageSpecFromBundleUrl,
   findManagedEnvIssues,
   waitForManagedEnvVars,
+  writeLocalDebugEnv,
 } from "./env.mjs";
 
 const TARGETS = ["production", "preview"];
@@ -42,6 +46,31 @@ test("buildManagedEnvVars marks plain identity vars as plain and secrets as sens
     vars.OPENCLAW_BUNDLE_UI_URL.value,
     "https://github.com/vercel-labs/openclaw-sandbox/releases/download/v2026.5.4-2/control-ui.tar.gz"
   );
+});
+
+
+test("writeLocalDebugEnv writes ignored local credentials for debugging", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "vclaw-local-debug-env-"));
+  const result = writeLocalDebugEnv(dir, {
+    ADMIN_SECRET: { value: "admin secret", type: "sensitive" },
+    VERCEL_AUTOMATION_BYPASS_SECRET: { value: "bypass secret", type: "sensitive" },
+    VCLAW_PROJECT_NAME: { value: "vercel-openclaw-52", type: "plain" },
+  });
+
+  assert.equal(result.envPath, join(dir, ".env.local"));
+  assert.deepEqual(result.keys, [
+    "ADMIN_SECRET",
+    "VERCEL_AUTOMATION_BYPASS_SECRET",
+    "VCLAW_PROJECT_NAME",
+  ]);
+  const env = await readFile(join(dir, ".env.local"), "utf8");
+  assert.match(env, /ADMIN_SECRET="admin secret"/);
+  assert.match(env, /VERCEL_AUTOMATION_BYPASS_SECRET="bypass secret"/);
+  assert.match(env, /VCLAW_PROJECT_NAME="vercel-openclaw-52"/);
+
+  const gitignore = await readFile(join(dir, ".gitignore"), "utf8");
+  assert.match(gitignore, /^\.env\.local$/m);
+  assert.match(gitignore, /^\.vercel$/m);
 });
 
 test("deriveOpenclawPackageSpecFromBundleUrl pins package spec from release tag", () => {
